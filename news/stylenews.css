@@ -8,19 +8,18 @@ body{
     color: black;
     width: 100%;
     height: 100%;
-    background-image: url(work/img/makeup-2676392_1920.jpg);
-    background-size: 100% 4000%;
-    background-repeat: no-repeat;
+    background-color: rgb(30, 30, 35);
 }
 #upweb{
-    height: 20px;
+    height: 40px;
     width: 100%;
     margin: 0 auto;
+    background-color: rgb(30, 30, 35);
 }
 #upbuttoms{
     position: absolute;
-    left: 64%;
-    top: 5%;
+    left: 79%;
+    top: 13%;
 }
 .upbuttoms{
     display: inline-block;
@@ -33,74 +32,65 @@ body{
 a{
     text-decoration: none;
 }
+#marta{
+    position: absolute;
+    top: 2%;
+    left: 13%;
+    width: 8%;
+    height: 15%;
+    border-radius: 50%;
+}
 #principal{
     position: absolute;
     background-color: rgba(221, 219, 219, 0.596);
-    top: 10%;
-    left: 9%;
-    width: 37%;
-    height: 80%;
+    top: 19%;
+    left: 16%;
+    width: 70%;
+    height: 76%;
     border-radius: 2%;
-}
-#marta{
-    position: absolute;
-    top: 5%;
-    left: 7%;
-    width: 20%;
-    height: 20%;
-    border-radius: 50%;
-}
-#ptitle{
-    position: absolute;
-    font-weight: 700;
-    top: 14%;
-    left: 30%;
-    font-size: 35px;
-    color: rgb(30, 30, 30);
-    text-decoration: none
 }
 #subtitle{
     position:absolute;
     font-weight: 700;
-    top: 30%;
-    left: 13%;
+    top: 8%;
+    left: 5%;
     font-size: 30px;
     color: rgb(20, 20, 20);
     text-decoration: none
 }
 #new1{
     position: absolute;
-    width: 500px;
-    height: 40px;
-    top: 38%;
-    left: 15%;
+    width: 600px;
+    height: 60px;
+    top: 20%;
+    left: 8%;
 }
 .newsimg{
-    height: 60px;
-    width: 80px;
+    height: 90px;
+    width: 130px;
     border-radius: 5%;
 }
 .news{
     position: absolute;
-    left: 18%;
-    font-size: 20px;
+    left: 25%;
+    font-size: 22px;
     display: inline-block;
     color: rgb(20, 20, 20);
     font-weight: 550;
 }
 .newssubtext{
     position: absolute;
-    left: 19%;
-    font-size: 10px;
+    left: 26%;
+    font-size: 12px;
     font-weight: 510;
     color: black;
-    top: 60%;
+    top: 55%;
     display: inline-block;
 }
 #new2{
     position: absolute;
-    width: 500px;
-    height: 40px;
-    top: 51%;
-    left: 15%;
+    width: 600px;
+    height: 60px;
+    top: 45%;
+    left: 8%;
 }

@@ -1,0 +1,95 @@
+*{
+    padding: 0px 0px;
+    margin: 0px 0px;
+    box-sizing: border-box;
+    font-family: 'Raleway', sans-serif;
+}
+body{
+    color: black;
+    width: 100%;
+    height: 100%;
+    background-color: rgb(30, 30, 35);
+}
+#upweb{
+    height: 20px;
+    width: 100%;
+    margin: 0 auto;
+}
+#upbuttoms{
+    position: absolute;
+    left: 89%;
+    top: 13%;
+}
+.upbuttoms{
+    display: inline-block;
+    font-weight: 700;
+    font-size: 25px;
+    margin: 0;
+    padding: 0px 7px;
+    color: whitesmoke;
+}
+a{
+    text-decoration: none;
+}
+h2 {
+    color: rgb(30, 30, 35);
+    margin: 11px;
+    font-weight: 700;
+}
+#principal{
+    position: absolute;
+    background-color: rgba(221, 219, 219, 0.596);
+    top: 19%;
+    left: 1%;
+    width: 98%;
+    height: 450%;
+    border-radius: 2%;
+}
+#marta{
+    position: absolute;
+    top: 2%;
+    left: 3%;
+    width: 8%;
+    height: 15%;
+    border-radius: 50%;
+}
+#ptitle{
+    position: absolute;
+    font-weight: 700;
+    top: 6.5%;
+    left: 12%;
+    font-size: 35px;
+    color: whitesmoke;
+    text-decoration: none
+}
+#pwork{
+    margin: 5px;
+}
+.plist{
+    position: relative;
+    display: inline-block;
+}
+.wtitle{
+    position: relative;
+    color: rgb(30, 30, 35);
+    font-weight: 600;
+    font-size: 15px;
+    top: -15px;
+}
+.works{
+    margin: 4px;
+    height: 330px;
+    border-radius: 2%;
+}
+#cdif1 , #cdif2 {
+    height: 380px;
+
+}
+#cdif3{
+    height: 400px;
+}
+#sdif1 , #sdif2 , #sdif3 , #sdif4{
+    margin: 20px;
+    height: 500px;
+}
+

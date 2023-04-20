@@ -1,0 +1,80 @@
+*{
+    padding: 0px 0px;
+    margin: 0px 0px;
+    box-sizing: border-box;
+    font-family: 'Raleway', sans-serif;
+}
+body{
+    color: black;
+    width: 100%;
+    height: 100%;
+    background-color: rgb(30, 30, 35);
+}
+#upweb{
+    height: 20px;
+    width: 100%;
+    margin: 0 auto;
+}
+#upbuttoms{
+    position: absolute;
+    left: 79%;
+    top: 13%;
+}
+.upbuttoms{
+    display: inline-block;
+    font-weight: 700;
+    font-size: 25px;
+    margin: 0;
+    padding: 0px 7px;
+    color: whitesmoke;
+}
+a{
+    text-decoration: none;
+}
+#principal{
+    position: absolute;
+    background-color: rgba(221, 219, 219, 0.596);
+    top: 15%;
+    left: 15%;
+    width: 70%;
+    height: 115%;
+    border-radius: 2%;
+    margin: 2%;
+}
+#marta{
+    position: absolute;
+    top: 2%;
+    left: 13%;
+    width: 8%;
+    height: 15%;
+    border-radius: 50%;
+}
+#ptitle{
+    position: absolute;
+    font-weight: 700;
+    top: 6.5%;
+    left: 22%;
+    font-size: 35px;
+    color: whitesmoke;
+    text-decoration: none
+}
+#critica{
+    position: absolute;
+    top: 3%;
+    left: 4%;
+    width: 92%;
+    height: 80%;
+}
+#avalos{
+    position: absolute;
+    font-size: 15px;
+    font-weight: 650;
+}
+#autor{
+    position: absolute;
+    left: 70%;
+}
+#fecha{
+    position: absolute;
+    left: 80%;
+}
