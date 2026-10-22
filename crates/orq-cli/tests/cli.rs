@@ -176,3 +176,103 @@ fn verify_rejects_unknown_step() {
         .assert()
         .failure();
 }
+
+#[test]
+fn build_flags_reach_the_request() {
+    let dir = project("multi");
+    let run = |extra: &[&str]| -> Value {
+        let out = orq(dir.path())
+            .args([
+                "verify",
+                "--json",
+                "--no-daemon",
+                "--no-cache",
+                "--up-to",
+                "check",
+                "--files",
+                "crates/leaf/src/lib.rs",
+            ])
+            .args(extra)
+            .assert()
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice(&out).unwrap()
+    };
+    let default = run(&[]);
+    assert_eq!(default["build"]["all_features"], Value::Bool(false));
+    assert_eq!(default["build"]["target"], Value::Null);
+    let flagged = run(&["--all-features", "--no-default-features"]);
+    assert_eq!(flagged["build"]["all_features"], Value::Bool(true));
+    assert_eq!(flagged["build"]["no_default_features"], Value::Bool(true));
+}
+
+#[test]
+fn verify_accepts_build_flags() {
+    Command::cargo_bin("orq")
+        .unwrap()
+        .args(["verify", "--help"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("--features")
+                .and(predicate::str::contains("--all-features"))
+                .and(predicate::str::contains("--no-default-features"))
+                .and(predicate::str::contains("--target")),
+        );
+}
+
+/// Stops the daemon (and the MCP server) even when the test fails.
+#[cfg(unix)]
+struct Cleanup {
+    root: PathBuf,
+    mcp: std::process::Child,
+}
+
+#[cfg(unix)]
+impl Drop for Cleanup {
+    fn drop(&mut self) {
+        let _ = self.mcp.kill();
+        let _ = self.mcp.wait();
+        let _ = Std::new(assert_cmd::cargo::cargo_bin("orq"))
+            .args(["daemon", "stop", "--root"])
+            .arg(&self.root)
+            .status();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn mcp_autostarts_the_daemon() {
+    let dir = project("multi");
+    let root = dir.path().canonicalize().unwrap();
+    let bin = assert_cmd::cargo::cargo_bin("orq");
+    let mcp = Std::new(&bin)
+        .args(["mcp", "--root"])
+        .arg(&root)
+        .current_dir(&root)
+        .env_remove("ORQ_NO_DAEMON")
+        .env_remove("CARGO_TARGET_DIR")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let _cleanup = Cleanup {
+        root: root.clone(),
+        mcp,
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let out = Std::new(&bin)
+            .args(["daemon", "status", "--root"])
+            .arg(&root)
+            .output()
+            .unwrap();
+        if out.status.success() && String::from_utf8_lossy(&out.stdout).contains("running") {
+            break;
+        }
+        assert!(Instant::now() < deadline, "daemon never came up");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}

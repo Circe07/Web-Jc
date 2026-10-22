@@ -71,13 +71,52 @@ fn process_error(message: impl Into<String>) -> CoreError {
 /// Used by [`serve_stdio`] and by tests (e.g. over `tokio::io::duplex`).
 /// `root` is the workspace to serve (default: the workspace containing the
 /// current directory).
+///
+/// Never starts a daemon (see [`serve_stdio`]).
 pub async fn serve_io<R, W>(root: Option<PathBuf>, reader: R, writer: W) -> Result<(), CoreError>
+where
+    R: AsyncRead + Send + Unpin + 'static,
+    W: AsyncWrite + Send + Unpin + 'static,
+{
+    serve(root, reader, writer, false).await
+}
+
+/// Whether a daemon may be started for this process.
+fn autostart_allowed(config: &Config) -> bool {
+    cfg!(unix)
+        && config.autostart_daemon
+        && !std::env::var_os("ORQ_NO_DAEMON").is_some_and(|v| v == "1")
+}
+
+/// Starts the daemon in the background if none answers. Never blocks the
+/// caller and never fails the server.
+fn autostart_daemon(root: PathBuf) {
+    // Fire and forget: the blocking task runs to completion on its own.
+    drop(tokio::task::spawn_blocking(move || {
+        if orq_daemon::client::daemon_status(&root).is_some() {
+            return;
+        }
+        if let Err(e) = orq_daemon::client::spawn_daemon(&root) {
+            tracing::warn!("could not autostart the daemon: {e}");
+        }
+    }));
+}
+
+async fn serve<R, W>(
+    root: Option<PathBuf>,
+    reader: R,
+    writer: W,
+    autostart: bool,
+) -> Result<(), CoreError>
 where
     R: AsyncRead + Send + Unpin + 'static,
     W: AsyncWrite + Send + Unpin + 'static,
 {
     let root = root::resolve(root.as_deref())?;
     let config = Config::load(&root)?;
+    if autostart && autostart_allowed(&config) {
+        autostart_daemon(root.clone());
+    }
     let server = OrqServer {
         state: Arc::new(tools::State { root, config }),
     };
@@ -96,7 +135,11 @@ where
 ///
 /// `root` is the workspace to serve (default: the workspace containing the
 /// current directory). Nothing but JSON-RPC may be written to stdout.
+///
+/// Unless `autostart_daemon = false` in `orq.toml` or `ORQ_NO_DAEMON=1`, a
+/// background daemon is started on unix when none is running. This spawns
+/// the current executable, so it must be the `orq` binary.
 pub async fn serve_stdio(root: Option<PathBuf>) -> Result<(), CoreError> {
     let (reader, writer) = rmcp::transport::stdio();
-    serve_io(root, reader, writer).await
+    serve(root, reader, writer, true).await
 }

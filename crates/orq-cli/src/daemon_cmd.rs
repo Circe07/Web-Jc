@@ -1,8 +1,6 @@
 //! `orq daemon start|stop|status|run`.
 
 use std::path::Path;
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use orq_core::ipc::{self, DaemonRequest, DaemonResponse, DaemonStatus};
@@ -45,24 +43,14 @@ fn start(root: &Path) -> Result<u8> {
         print_status(&status);
         return Ok(0);
     }
-    let exe = std::env::current_exe().context("locating the orq executable")?;
-    Command::new(exe)
-        .args(["daemon", "run", "--root"])
-        .arg(root)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .context("spawning the daemon")?;
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(100));
-        if let Ok(Some(status)) = query_status(root) {
+    orq_daemon::client::spawn_daemon(root)?;
+    match query_status(root)? {
+        Some(status) => {
             print_status(&status);
-            return Ok(0);
+            Ok(0)
         }
+        None => bail!("daemon did not answer within 5 s"),
     }
-    bail!("daemon did not answer within 5 s")
 }
 
 fn stop(root: &Path) -> Result<u8> {

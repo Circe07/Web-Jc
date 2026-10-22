@@ -169,3 +169,39 @@ async fn impact_lists_dependents() {
     );
     assert!(text(&result).starts_with("impact:"));
 }
+
+#[tokio::test]
+async fn build_args_are_in_the_schema() {
+    let dir = fixture("single");
+    let (mut client, _server) = start(dir.path()).await;
+    let list = client.request("tools/list", json!({})).await;
+    for tool in list["tools"].as_array().unwrap() {
+        let name = tool["name"].as_str().unwrap();
+        let props = &tool["inputSchema"]["properties"];
+        let has = ["features", "all_features", "no_default_features", "target"]
+            .iter()
+            .all(|k| props.get(k).is_some());
+        assert_eq!(
+            has,
+            name == "verify" || name == "run_affected_tests",
+            "{name}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn verify_accepts_build_args() {
+    let dir = fixture("multi");
+    let (mut client, _server) = start(dir.path()).await;
+    let result = client
+        .call(
+            "verify",
+            json!({"files": ["crates/leaf/src/lib.rs"], "up_to": "check", "all_features": true,
+                   "no_default_features": true}),
+        )
+        .await;
+    // The runner may or may not honour the features yet; either way the call
+    // must be accepted and answer with a report, not an argument error.
+    assert!(result["structuredContent"].is_object(), "{result}");
+    assert!(!text(&result).contains("invalid arguments"), "{result}");
+}
