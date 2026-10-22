@@ -2,7 +2,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
 
-use orq_core::{CacheKey, CrateId, ImpactSet, Outcome, ResultCache, Step, VerifyResult};
+use orq_core::{
+    BuildOptions, CacheKey, CrateId, ImpactSet, Outcome, ResultCache, Step, VerifyResult,
+};
 use tempfile::TempDir;
 
 use crate::RedbCache;
@@ -82,7 +84,8 @@ fn sample(total_ms: u64) -> VerifyResult {
 }
 
 fn key_of(c: &RedbCache, ws: &Ws, i: &ImpactSet) -> CacheKey {
-    c.key(&ws.root, i, Step::Test).unwrap()
+    c.key(&ws.root, i, Step::Test, &BuildOptions::default())
+        .unwrap()
 }
 
 fn key_scenarios(git: bool) {
@@ -142,8 +145,12 @@ fn key_depends_on_up_to_and_full_rebuild() {
     let db = tempfile::tempdir().unwrap();
     let c = cache(&db);
     let i = impact(&ws, &["mid"], &["app"]);
-    let a = c.key(&ws.root, &i, Step::Check).unwrap();
-    let b = c.key(&ws.root, &i, Step::Test).unwrap();
+    let a = c
+        .key(&ws.root, &i, Step::Check, &BuildOptions::default())
+        .unwrap();
+    let b = c
+        .key(&ws.root, &i, Step::Test, &BuildOptions::default())
+        .unwrap();
     assert_ne!(a, b);
 
     let full = ImpactSet {
@@ -199,7 +206,8 @@ fn key_depends_on_rustflags_and_relevant_env() {
     let db = tempfile::tempdir().unwrap();
     let key = |vars: &[(&str, &str)]| {
         let c = env_cache(&db, vars);
-        c.key(&ws.root, &i, Step::Test).unwrap()
+        c.key(&ws.root, &i, Step::Test, &BuildOptions::default())
+            .unwrap()
     };
 
     let base = key(&[]);
@@ -230,7 +238,9 @@ fn key_depends_on_rustc_binary() {
     let i = impact(&ws, &["mid"], &[]);
     let db = tempfile::tempdir().unwrap();
     let c = env_cache(&db, &[("RUSTC", "definitely-not-a-rustc-binary")]);
-    assert!(c.key(&ws.root, &i, Step::Test).is_err());
+    assert!(c
+        .key(&ws.root, &i, Step::Test, &BuildOptions::default())
+        .is_err());
 }
 
 #[test]
@@ -299,6 +309,30 @@ fn key_is_fast_on_multi_fixture() {
     let _ = key_of(&c, &ws, &i);
     let elapsed = start.elapsed();
     assert!(elapsed.as_millis() < 100, "key took {elapsed:?}");
+}
+
+#[test]
+fn key_depends_on_build_options() {
+    let ws = workspace(false);
+    let db = tempfile::tempdir().unwrap();
+    let c = cache(&db);
+    let i = impact(&ws, &["leaf"], &[]);
+    let plain = c
+        .key(&ws.root, &i, Step::Test, &BuildOptions::default())
+        .unwrap();
+    let featured = BuildOptions {
+        features: vec!["x".into()],
+        ..BuildOptions::default()
+    };
+    let target = BuildOptions {
+        target: Some("wasm32-unknown-unknown".into()),
+        ..BuildOptions::default()
+    };
+    let a = c.key(&ws.root, &i, Step::Test, &featured).unwrap();
+    let b = c.key(&ws.root, &i, Step::Test, &target).unwrap();
+    assert_ne!(plain, a);
+    assert_ne!(plain, b);
+    assert_ne!(a, b);
 }
 
 /// A tracked symlink to a directory (ripgrep's `HomebrewFormula`) must not

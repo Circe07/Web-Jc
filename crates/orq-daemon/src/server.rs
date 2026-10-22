@@ -67,6 +67,7 @@ pub(crate) async fn serve(root: &Path, options: DaemonOptions) -> Result<(), Cor
     let root = root.canonicalize().map_err(|e| CoreError::io(root, e))?;
     let config = Config::load(&root)?;
     let socket = ipc::socket_path(&root);
+    ipc::prepare_socket_dir(&socket)?;
 
     if socket.exists() {
         let probe_root = root.clone();
@@ -95,6 +96,7 @@ pub(crate) async fn serve(root: &Path, options: DaemonOptions) -> Result<(), Cor
             .map_err(|e| tracing::warn!("cache disabled: {e}"))
             .ok(),
         compressor: LlmCompressor::new(config.lang),
+        build: config.build.clone(),
     };
     let (warming, _) = watch::channel(false);
     let shared = Arc::new(Shared {
@@ -246,10 +248,10 @@ async fn warm_up(shared: &Arc<Shared>) -> Result<(), CoreError> {
     let result = shared
         .pipeline
         .runner
-        .run(&shared.root, &impact, Step::Check)
+        .run(&shared.root, &impact, Step::Check, &shared.pipeline.build)
         .await?;
     if let Some(cache) = &shared.pipeline.cache {
-        match cache.key(&shared.root, &impact, Step::Check) {
+        match cache.key(&shared.root, &impact, Step::Check, &shared.pipeline.build) {
             Ok(key) => {
                 if let Err(e) = cache.put(&key, &result) {
                     tracing::warn!("warm-up cache store failed: {e}");

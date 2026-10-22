@@ -218,6 +218,42 @@ pub struct VerifyResult {
     pub total_ms: u64,
 }
 
+/// Cargo feature and target selection, applied to every step of the ladder.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(default, deny_unknown_fields)]
+pub struct BuildOptions {
+    /// `--features a,b` (empty = none).
+    pub features: Vec<String>,
+    /// `--all-features`.
+    pub all_features: bool,
+    /// `--no-default-features`.
+    pub no_default_features: bool,
+    /// `--target <triple>`.
+    pub target: Option<String>,
+}
+
+impl BuildOptions {
+    /// The cargo arguments these options translate to, in a stable order.
+    pub fn cargo_args(&self) -> Vec<String> {
+        let mut args = Vec::new();
+        if self.all_features {
+            args.push("--all-features".to_string());
+        }
+        if self.no_default_features {
+            args.push("--no-default-features".to_string());
+        }
+        if !self.features.is_empty() {
+            args.push("--features".to_string());
+            args.push(self.features.join(","));
+        }
+        if let Some(target) = &self.target {
+            args.push("--target".to_string());
+            args.push(target.clone());
+        }
+        args
+    }
+}
+
 /// Request to verify a workspace (CLI, daemon IPC and MCP all use it).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
@@ -232,6 +268,9 @@ pub struct VerifyRequest {
     pub token_budget: usize,
     /// Whether to read and write the result cache.
     pub use_cache: bool,
+    /// Feature/target selection; `None` uses the defaults of whoever runs
+    /// the pipeline (`Config::build`).
+    pub build: Option<BuildOptions>,
 }
 
 impl Default for VerifyRequest {
@@ -242,6 +281,7 @@ impl Default for VerifyRequest {
             up_to: Step::Test,
             token_budget: DEFAULT_TOKEN_BUDGET,
             use_cache: true,
+            build: None,
         }
     }
 }
@@ -417,6 +457,28 @@ mod tests {
         assert_eq!(names, ["app", "base", "mid"]);
         assert!(!impact.is_empty());
         assert!(ImpactSet::default().is_empty());
+    }
+
+    #[test]
+    fn build_options_cargo_args() {
+        assert!(BuildOptions::default().cargo_args().is_empty());
+        let opts = BuildOptions {
+            features: vec!["a".into(), "b".into()],
+            all_features: false,
+            no_default_features: true,
+            target: Some("wasm32-unknown-unknown".into()),
+        };
+        assert_eq!(
+            opts.cargo_args(),
+            [
+                "--no-default-features",
+                "--features",
+                "a,b",
+                "--target",
+                "wasm32-unknown-unknown"
+            ]
+        );
+        roundtrip(&opts);
     }
 
     #[test]

@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
-use orq_core::{CacheKey, CoreError, ImpactSet, ResultCache, Step, VerifyResult, ORQ_VERSION};
+use orq_core::{
+    BuildOptions, CacheKey, CoreError, ImpactSet, ResultCache, Step, VerifyResult, ORQ_VERSION,
+};
 use redb::{Database, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition};
 
 use crate::inputs::{collect_files, relevant_env, GLOBAL_FILES};
@@ -174,7 +176,13 @@ fn field(h: &mut blake3::Hasher, bytes: &[u8]) {
 }
 
 impl ResultCache for RedbCache {
-    fn key(&self, root: &Path, impact: &ImpactSet, up_to: Step) -> Result<CacheKey, CoreError> {
+    fn key(
+        &self,
+        root: &Path,
+        impact: &ImpactSet,
+        up_to: Step,
+        build: &BuildOptions,
+    ) -> Result<CacheKey, CoreError> {
         let env = relevant_env((self.env)());
         let rustc = self.rustc_version(&env)?;
 
@@ -183,6 +191,9 @@ impl ResultCache for RedbCache {
         field(&mut h, ORQ_VERSION.as_bytes());
         field(&mut h, up_to.as_str().as_bytes());
         field(&mut h, &[u8::from(impact.full_rebuild)]);
+        for arg in build.cargo_args() {
+            field(&mut h, arg.as_bytes());
+        }
         field(&mut h, rustc.as_bytes());
         for (k, v) in &env {
             field(&mut h, k.as_bytes());

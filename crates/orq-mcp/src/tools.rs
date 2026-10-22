@@ -219,6 +219,7 @@ async fn verify(
         up_to,
         token_budget: budget,
         use_cache: true,
+        build: None,
     };
     let mode = if no_daemon() {
         Mode::InProcess

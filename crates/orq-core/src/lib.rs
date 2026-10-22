@@ -52,12 +52,14 @@ pub trait ImpactAnalyzer: Send + Sync {
 /// Runs the verification ladder on the crates of an [`ImpactSet`].
 pub trait StepRunner: Send + Sync {
     /// Runs steps in order up to `up_to`, stopping at the first one with
-    /// errors. The result has `cache_hit = false` and `impact = impact`.
+    /// errors, passing `build` to every cargo invocation. The result has
+    /// `cache_hit = false` and `impact = impact`.
     fn run(
         &self,
         root: &Path,
         impact: &ImpactSet,
         up_to: Step,
+        build: &BuildOptions,
     ) -> impl Future<Output = Result<VerifyResult, CoreError>> + Send;
 }
 
@@ -71,8 +73,14 @@ pub trait Compressor: Send + Sync {
 /// Stores verification results keyed by the relevant workspace state.
 pub trait ResultCache: Send + Sync {
     /// Computes the key for the current state of the crates in `impact`,
-    /// verified up to `up_to`.
-    fn key(&self, root: &Path, impact: &ImpactSet, up_to: Step) -> Result<CacheKey, CoreError>;
+    /// verified up to `up_to` with `build` options.
+    fn key(
+        &self,
+        root: &Path,
+        impact: &ImpactSet,
+        up_to: Step,
+        build: &BuildOptions,
+    ) -> Result<CacheKey, CoreError>;
 
     /// Returns the stored result for `key`, if any.
     fn get(&self, key: &CacheKey) -> Result<Option<VerifyResult>, CoreError>;

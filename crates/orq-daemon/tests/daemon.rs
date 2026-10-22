@@ -178,6 +178,7 @@ async fn second_serve_reports_already_running() {
 async fn stale_socket_is_replaced() {
     let (_dir, root) = fixture();
     let socket = ipc::socket_path(&root);
+    ipc::prepare_socket_dir(&socket).unwrap();
     // Leave a dead socket file behind.
     drop(std::os::unix::net::UnixListener::bind(&socket).unwrap());
     assert!(socket.exists());

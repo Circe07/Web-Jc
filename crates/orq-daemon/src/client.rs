@@ -61,6 +61,7 @@ pub async fn verify(
             .map_err(|e| tracing::warn!("cache disabled: {e}"))
             .ok(),
         compressor: LlmCompressor::new(config.lang),
+        build: config.build.clone(),
     };
     let result = pipeline.verify(request).await?;
     Ok(Verified {

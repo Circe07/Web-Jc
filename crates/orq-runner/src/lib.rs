@@ -19,8 +19,8 @@ use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use orq_core::{
-    Config, CoreError, Diagnostic, ImpactSet, NextestMode, Outcome, Severity, Step, StepReport,
-    StepRunner, TestFailure, VerifyResult,
+    BuildOptions, Config, CoreError, Diagnostic, ImpactSet, NextestMode, Outcome, Severity, Step,
+    StepReport, StepRunner, TestFailure, VerifyResult,
 };
 use tokio::process::Command;
 
@@ -98,7 +98,9 @@ impl StepRunner for Runner {
         root: &Path,
         impact: &ImpactSet,
         up_to: Step,
+        _build: &BuildOptions,
     ) -> Result<VerifyResult, CoreError> {
+        // TODO(T4.2): pass `build.cargo_args()` to every cargo invocation.
         self.verify(root, impact, up_to)
             .await
             .map_err(CoreError::from)

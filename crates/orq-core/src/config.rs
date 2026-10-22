@@ -2,7 +2,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{CoreError, Step, DEFAULT_TOKEN_BUDGET};
+use crate::{BuildOptions, CoreError, Step, DEFAULT_TOKEN_BUDGET};
 
 /// Name of the per-project config file, read from the workspace root.
 pub const CONFIG_FILE_NAME: &str = "orq.toml";
@@ -39,6 +39,13 @@ pub enum NextestMode {
 /// lang = "en"
 /// nextest = "auto"
 /// ignore = ["docs/**"]
+/// autostart_daemon = true
+///
+/// [build]
+/// features = ["serde"]
+/// all_features = false
+/// no_default_features = false
+/// target = "x86_64-unknown-linux-gnu"
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
@@ -54,6 +61,11 @@ pub struct Config {
     /// Glob patterns (relative to the root) whose changes are ignored.
     /// Supports `*` (within a path segment) and `**` (any number of segments).
     pub ignore: Vec<String>,
+    /// Whether `orq mcp` starts a daemon for the workspace when none is
+    /// running (`ORQ_NO_DAEMON=1` disables daemons altogether).
+    pub autostart_daemon: bool,
+    /// Default feature/target selection.
+    pub build: BuildOptions,
 }
 
 impl Default for Config {
@@ -64,6 +76,8 @@ impl Default for Config {
             lang: Lang::En,
             nextest: NextestMode::Auto,
             ignore: Vec::new(),
+            autostart_daemon: true,
+            build: BuildOptions::default(),
         }
     }
 }
@@ -140,6 +154,11 @@ mod tests {
             lang = "es"
             nextest = "never"
             ignore = ["docs/**"]
+            autostart_daemon = false
+
+            [build]
+            features = ["serde", "cli"]
+            target = "aarch64-apple-darwin"
             "#,
         )
         .unwrap();
@@ -148,6 +167,10 @@ mod tests {
         assert_eq!(config.lang, Lang::Es);
         assert_eq!(config.nextest, NextestMode::Never);
         assert_eq!(config.ignore, ["docs/**"]);
+        assert!(!config.autostart_daemon);
+        assert_eq!(config.build.features, ["serde", "cli"]);
+        assert_eq!(config.build.target.as_deref(), Some("aarch64-apple-darwin"));
+        assert!(Config::from_toml_str("[build]\nfeaturs = []").is_err());
     }
 
     #[test]

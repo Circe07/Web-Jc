@@ -25,6 +25,7 @@ pub fn run(args: &VerifyArgs) -> Result<u8> {
         up_to: args.up_to.unwrap_or(config.up_to),
         token_budget: budget,
         use_cache: !args.no_cache,
+        build: None,
     };
 
     let no_daemon = args.no_daemon || std::env::var_os("ORQ_NO_DAEMON").is_some_and(|v| v == "1");

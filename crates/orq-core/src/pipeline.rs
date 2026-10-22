@@ -1,8 +1,8 @@
 use std::time::Instant;
 
 use crate::{
-    CacheKey, CompactReport, Compressor, CoreError, ImpactAnalyzer, ResultCache, StepRunner,
-    VerifyRequest, VerifyResult,
+    BuildOptions, CacheKey, CompactReport, Compressor, CoreError, ImpactAnalyzer, ResultCache,
+    StepRunner, VerifyRequest, VerifyResult,
 };
 
 /// The verification flow shared by the CLI (in-process mode) and the daemon:
@@ -19,6 +19,8 @@ pub struct Pipeline<A, R, C, P> {
     pub cache: Option<C>,
     /// Report compressor.
     pub compressor: P,
+    /// Feature/target selection used when a request has none.
+    pub build: BuildOptions,
 }
 
 impl<A, R, C, P> Pipeline<A, R, C, P>
@@ -42,10 +44,11 @@ where
             None => self.analyzer.detect_changes(root)?,
         };
         let impact = self.analyzer.analyze(root, &changes)?;
+        let build = request.build.as_ref().unwrap_or(&self.build);
 
         let cache = self.cache.as_ref().filter(|_| request.use_cache);
         let key: Option<CacheKey> = cache.and_then(|c| {
-            c.key(root, &impact, request.up_to)
+            c.key(root, &impact, request.up_to, build)
                 .map_err(|e| tracing::warn!("cache key failed: {e}"))
                 .ok()
         });
@@ -63,7 +66,7 @@ where
             }
         }
 
-        let mut result = self.runner.run(root, &impact, request.up_to).await?;
+        let mut result = self.runner.run(root, &impact, request.up_to, build).await?;
         result.cache_hit = false;
         result.total_ms = elapsed_ms(start);
 
@@ -125,6 +128,7 @@ mod tests {
             _: &Path,
             impact: &ImpactSet,
             _: Step,
+            _: &BuildOptions,
         ) -> impl Future<Output = Result<VerifyResult, CoreError>> + Send {
             self.0.fetch_add(1, Ordering::SeqCst);
             let impact = impact.clone();
@@ -145,10 +149,17 @@ mod tests {
     #[derive(Default)]
     struct MemCache(Mutex<Vec<(CacheKey, VerifyResult)>>);
     impl ResultCache for MemCache {
-        fn key(&self, _: &Path, impact: &ImpactSet, up_to: Step) -> Result<CacheKey, CoreError> {
+        fn key(
+            &self,
+            _: &Path,
+            impact: &ImpactSet,
+            up_to: Step,
+            build: &BuildOptions,
+        ) -> Result<CacheKey, CoreError> {
             let mut k = [0u8; 32];
             k[0] = impact.changed.len() as u8;
             k[1] = up_to as u8;
+            k[2] = build.features.len() as u8;
             Ok(CacheKey(k))
         }
         fn get(&self, key: &CacheKey) -> Result<Option<VerifyResult>, CoreError> {
@@ -166,7 +177,13 @@ mod tests {
 
     struct FailingCache;
     impl ResultCache for FailingCache {
-        fn key(&self, _: &Path, _: &ImpactSet, _: Step) -> Result<CacheKey, CoreError> {
+        fn key(
+            &self,
+            _: &Path,
+            _: &ImpactSet,
+            _: Step,
+            _: &BuildOptions,
+        ) -> Result<CacheKey, CoreError> {
             Err(CoreError::Cache("broken".into()))
         }
         fn get(&self, _: &CacheKey) -> Result<Option<VerifyResult>, CoreError> {
@@ -210,6 +227,7 @@ mod tests {
             runner: CountingRunner::default(),
             cache,
             compressor: EchoCompressor,
+            build: BuildOptions::default(),
         }
     }
 
@@ -252,6 +270,23 @@ mod tests {
         let p = pipeline::<MemCache>(None);
         let result = block_on(p.verify(&request(None))).unwrap();
         assert_eq!(result.impact.changed[0].name, "detected");
+    }
+
+    #[test]
+    fn request_build_options_change_the_key() {
+        let p = pipeline(Some(MemCache::default()));
+        let plain = request(Some(&["a"]));
+        let with_features = VerifyRequest {
+            build: Some(BuildOptions {
+                features: vec!["x".into()],
+                ..BuildOptions::default()
+            }),
+            ..plain.clone()
+        };
+        block_on(p.verify(&plain)).unwrap();
+        let second = block_on(p.verify(&with_features)).unwrap();
+        assert!(!second.cache_hit);
+        assert_eq!(p.runner.0.load(Ordering::SeqCst), 2);
     }
 
     #[test]
