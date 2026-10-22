@@ -5,6 +5,12 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/orq-cache"
+description = "Content-addressed result cache for orq verification runs."
+keywords = ["cargo", "build", "ai-agents", "mcp", "testing"]
+categories = ["development-tools", "development-tools::build-utils"]
+readme = "../../README.md"
 
 [dependencies]
 orq-core.workspace = true
