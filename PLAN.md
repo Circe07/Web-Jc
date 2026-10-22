@@ -301,6 +301,35 @@ Cada oleada se lanza **en paralelo** dentro de sí misma. No se empieza una olea
 **T3.4 Cierre (líder)**
 - README completo (instalación, uso con Claude Code, configuración `orq.toml`, benchmarks), `CHANGELOG.md`, publicar `v0.2.0`.
 
+### Oleada 4 — Rendimiento, seguridad, proyectos reales y distribución (5 subagentes en paralelo)
+
+Base preparada por el líder (`5e6cb9b`):
+- `BuildOptions`: features y target, en `orq.toml` `[build]` y en cada petición, e incluidas ya en la clave de caché.
+- `Config.autostart_daemon`.
+- Directorio privado del socket (`ipc::prepare_socket_dir`).
+
+**T4.1 Seguridad del daemon** (`orq-daemon`, `server.rs`): socket `0600` y comprobación del UID del peer; se rechazan las conexiones de otros usuarios.
+
+**T4.2 Rendimiento del runner** (`orq-runner`):
+- Un solo `cargo clippy` cubre los peldaños Check y Clippy; sus diagnósticos se reparten entre los dos.
+- `fmt` corre en paralelo con la compilación.
+- `build.cargo_args()` se pasa a check, clippy y test.
+
+**T4.3 Rendimiento de la caché** (`orq-cache`):
+- `rustc -Vv` se guarda en disco con una huella de la toolchain.
+- Índice de hashes por (tamaño, mtime) para no releer los ficheros sin cambios.
+
+**T4.4 Features en CLI/MCP y arranque automático del daemon** (`orq-cli` `verify`, `orq-mcp`, `orq-daemon` `client.rs`):
+- Flags `--features/--all-features/--no-default-features/--target` y sus argumentos MCP equivalentes.
+- `orq mcp` arranca el daemon si `autostart_daemon` está activo.
+
+**T4.5 Distribución** (`.github/workflows/release.yml`, metadatos de los `Cargo.toml`, `packaging/`):
+- Binarios por tag `v*` para Linux y macOS.
+- Paquetes publicables en crates.io (`orq-*`; el nombre `orq` está ocupado).
+- Fórmula de Homebrew.
+
+Fuera de esta oleada: selección fina de tests, medición de la calidad de la compresión con tareas reales, named pipes en Windows.
+
 ---
 
 ## 6. Fixtures (`fixtures/`)
