@@ -1,0 +1,16 @@
+---
+source: crates/orq-compress/tests/compress.rs
+expression: r.text
+---
+FAIL check (2 errors, 3 warnings) · crates: api · 1.8s
+[1] E0308 mismatched types — crates/api/src/handler.rs:42:17
+    42 |     let id: u64 = req.id;
+       |                 ^
+    suggestion: req.id.parse::<u64>()?
+[2] E0599 no method named `foo` found — crates/api/src/handler.rs:50:17
+    50 |     let id: u64 = req.id;
+       |                 ^
+    51 |     other(50);
+[W1] unused_variables unused variable: `x` — crates/api/src/lib.rs:10:17
+[W2] unused_variables unused variable: `x` — crates/api/src/lib.rs:11:17
+[W3] unused_variables unused variable: `x` — crates/api/src/lib.rs:12:17

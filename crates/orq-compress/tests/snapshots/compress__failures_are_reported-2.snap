@@ -1,0 +1,43 @@
+---
+source: crates/orq-compress/tests/compress.rs
+expression: out.json
+---
+{
+  "cache_hit": false,
+  "crates": [
+    "api"
+  ],
+  "duration_ms": 1800,
+  "errors": [],
+  "failed_step": "test",
+  "full_rebuild": false,
+  "hidden": {
+    "errors": 0,
+    "test_failures": 0,
+    "warnings": 0
+  },
+  "outcome": "fail",
+  "steps": [
+    "check"
+  ],
+  "test_failures": [
+    {
+      "crate": "api",
+      "index": 1,
+      "name": "tests::adds",
+      "output": [
+        "thread 'tests::adds' panicked at src/lib.rs:9:5:",
+        "assertion `left == right` failed",
+        "left: 3",
+        "right: 4"
+      ]
+    }
+  ],
+  "total": {
+    "errors": 0,
+    "test_failures": 1,
+    "warnings": 0
+  },
+  "truncated": false,
+  "warnings": []
+}
