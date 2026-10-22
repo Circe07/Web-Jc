@@ -143,8 +143,12 @@ pub struct Diagnostic {
     pub line: Option<u32>,
     /// 1-based column of the primary span.
     pub column: Option<u32>,
-    /// Relevant source lines (plain text, no ANSI escapes).
+    /// Relevant source lines (plain text, no ANSI escapes), starting at
+    /// `line`.
     pub snippet: Option<String>,
+    /// Label of the primary span, e.g. "expected `u64`, found `String`".
+    #[serde(default)]
+    pub label: Option<String>,
     /// Suggested replacement from rustc/clippy, if any.
     pub suggestion: Option<String>,
     /// Crate the diagnostic was emitted for.
@@ -320,6 +324,7 @@ mod tests {
                 line: Some(42),
                 column: Some(17),
                 snippet: Some("let id: u64 = req.id;".into()),
+                label: Some("expected `u64`, found `String`".into()),
                 suggestion: Some("req.id.parse::<u64>()?".into()),
                 crate_id: Some(krate("api")),
                 step: Step::Check,

@@ -529,12 +529,20 @@ fn render_error(index: usize, e: &Entry<'_>, p: &Params, w: &Words) -> (Vec<Stri
                 if let Some(col) = d.column {
                     let col = (col as usize).saturating_sub(1);
                     if col < p.width {
-                        lines.push(format!("    {:>gutter$} | {}^", "", " ".repeat(col)));
+                        let label = d
+                            .label
+                            .as_deref()
+                            .map(|l| format!(" {}", clip(&one_line(l), p.width)))
+                            .unwrap_or_default();
+                        lines.push(format!("    {:>gutter$} | {}^{label}", "", " ".repeat(col)));
                     }
                 }
             }
         }
         item["snippet"] = json!(snippet);
+        if let Some(l) = &d.label {
+            item["label"] = json!(clip(&one_line(l), p.width));
+        }
     }
     if p.suggestions {
         if let Some(s) = &d.suggestion {

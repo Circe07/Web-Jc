@@ -24,6 +24,7 @@ fn diag(sev: Severity, code: Option<&str>, msg: &str, file: &str, line: u32) -> 
         line: Some(line),
         column: Some(17),
         snippet: Some(format!("    let id: u64 = req.id;\n    other({line});")),
+        label: (code == Some("E0308")).then(|| "expected `u64`, found `String`".to_string()),
         suggestion: None,
         crate_id: Some(krate("api")),
         step: Step::Check,

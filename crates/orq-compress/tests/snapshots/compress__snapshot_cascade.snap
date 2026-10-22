@@ -25,5 +25,5 @@ FAIL check (6 errors) · crates: api · 1.8s
     14 |     other(13);
 [6] E0308 mismatched types — src/other.rs:3:17
     3 |     let id: u64 = req.id;
-      |                 ^
+      |                 ^ expected `u64`, found `String`
     4 |     other(3);

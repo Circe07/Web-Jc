@@ -1,6 +1,6 @@
 ---
 source: crates/orq-runner/tests/fixtures.rs
-expression: result
+expression: normalized
 ---
 {
   "outcome": {
@@ -28,6 +28,7 @@ expression: result
       "line": 6,
       "column": 19,
       "snippet": "    let id: u64 = req.id.clone();",
+      "label": "expected `u64`, found `String`",
       "suggestion": null,
       "crate_id": {
         "name": "broken-type",
@@ -43,6 +44,7 @@ expression: result
       "line": 6,
       "column": 19,
       "snippet": "    let id: u64 = req.id.clone();",
+      "label": "expected `u64`, found `String`",
       "suggestion": null,
       "crate_id": {
         "name": "broken-type",

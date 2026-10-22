@@ -8,12 +8,16 @@
 
 mod config;
 mod error;
+pub mod ipc;
+mod pipeline;
 mod types;
 
 pub use config::{Config, Lang, NextestMode, CONFIG_FILE_NAME};
 pub use error::CoreError;
+pub use pipeline::Pipeline;
 pub use types::*;
 
+use std::future::Future;
 use std::path::Path;
 
 /// Default token budget for a [`CompactReport`].
@@ -37,6 +41,22 @@ pub trait ImpactAnalyzer: Send + Sync {
     /// Paths in `changes` are relative to `root`. Files outside every crate
     /// are ignored.
     fn analyze(&self, root: &Path, changes: &ChangeSet) -> Result<ImpactSet, CoreError>;
+
+    /// Detects the changed files of the workspace at `root` (used when a
+    /// [`VerifyRequest`] has no explicit `changes`).
+    fn detect_changes(&self, root: &Path) -> Result<ChangeSet, CoreError>;
+}
+
+/// Runs the verification ladder on the crates of an [`ImpactSet`].
+pub trait StepRunner: Send + Sync {
+    /// Runs steps in order up to `up_to`, stopping at the first one with
+    /// errors. The result has `cache_hit = false` and `impact = impact`.
+    fn run(
+        &self,
+        root: &Path,
+        impact: &ImpactSet,
+        up_to: Step,
+    ) -> impl Future<Output = Result<VerifyResult, CoreError>> + Send;
 }
 
 /// Turns a [`VerifyResult`] into a compact report for an LLM.

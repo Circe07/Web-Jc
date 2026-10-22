@@ -44,6 +44,8 @@ struct Span {
     #[serde(default)]
     text: Vec<SpanText>,
     suggested_replacement: Option<String>,
+    #[serde(default)]
+    label: Option<String>,
     expansion: Option<Box<Expansion>>,
 }
 
@@ -110,7 +112,13 @@ fn to_diagnostic(
     if is_summary(&msg.message) {
         return None;
     }
-    let primary = msg.spans.iter().find(|s| s.is_primary).map(Span::call_site);
+    let primary_span = msg.spans.iter().find(|s| s.is_primary);
+    let primary = primary_span.map(Span::call_site);
+    let label = primary_span
+        .and_then(|s| s.label.as_deref())
+        .or_else(|| primary.and_then(|s| s.label.as_deref()))
+        .filter(|l| !l.trim().is_empty())
+        .map(str::to_string);
     let snippet = primary
         .map(|s| {
             s.text
@@ -128,6 +136,7 @@ fn to_diagnostic(
         line: primary.map(|s| s.line_start),
         column: primary.map(|s| s.column_start),
         snippet,
+        label,
         suggestion: suggestion(msg),
         crate_id: index.resolve(line.manifest_path.as_deref(), line.package_id.as_deref()),
         step,
@@ -201,6 +210,7 @@ pub(crate) fn parse_fmt_diffs(output: &str, index: &CrateIndex) -> Vec<Diagnosti
                 line: Some(h.line),
                 column: None,
                 snippet: (!snippet.is_empty()).then_some(snippet),
+                label: None,
                 suggestion: None,
                 crate_id: index.for_path(&h.file),
                 step: Step::Fmt,

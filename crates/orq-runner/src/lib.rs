@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use orq_core::{
     Config, CoreError, Diagnostic, ImpactSet, NextestMode, Outcome, Severity, Step, StepReport,
-    TestFailure, VerifyResult,
+    StepRunner, TestFailure, VerifyResult,
 };
 use tokio::process::Command;
 
@@ -89,6 +89,19 @@ struct StepOutput {
     test_failures: Vec<TestFailure>,
     /// `false` if the step produced errors or failed tests.
     passed: bool,
+}
+
+impl StepRunner for Runner {
+    async fn run(
+        &self,
+        root: &Path,
+        impact: &ImpactSet,
+        up_to: Step,
+    ) -> Result<VerifyResult, CoreError> {
+        self.verify(root, impact, up_to)
+            .await
+            .map_err(CoreError::from)
+    }
 }
 
 impl Runner {
@@ -287,6 +300,7 @@ fn process_error(step: Step, out: &Captured) -> Diagnostic {
         line: None,
         column: None,
         snippet: None,
+        label: None,
         suggestion: None,
         crate_id: None,
         step,

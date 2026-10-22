@@ -186,6 +186,10 @@ impl CargoImpactAnalyzer {
 }
 
 impl ImpactAnalyzer for CargoImpactAnalyzer {
+    fn detect_changes(&self, root: &Path) -> Result<ChangeSet, CoreError> {
+        detect_changes(root)
+    }
+
     fn analyze(&self, root: &Path, changes: &ChangeSet) -> Result<ImpactSet, CoreError> {
         let canon_root = canonical(root)?;
         let graph = self.graph(&canon_root)?;

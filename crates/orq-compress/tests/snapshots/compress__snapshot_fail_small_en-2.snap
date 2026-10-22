@@ -15,6 +15,7 @@ expression: r.json
       "derived_from": null,
       "file": "crates/api/src/handler.rs",
       "index": 1,
+      "label": "expected `u64`, found `String`",
       "line": 42,
       "message": "mismatched types",
       "snippet": [
