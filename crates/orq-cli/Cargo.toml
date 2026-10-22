@@ -12,8 +12,22 @@ path = "src/main.rs"
 
 [dependencies]
 orq-core.workspace = true
-anyhow.workspace = true
+orq-impact.workspace = true
+orq-runner.workspace = true
+orq-compress.workspace = true
+orq-cache.workspace = true
+orq-daemon.workspace = true
+tokio.workspace = true
 clap.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+assert_cmd.workspace = true
+predicates.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true
