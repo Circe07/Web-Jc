@@ -8,8 +8,9 @@ tokens as possible:
   reverse dependents are verified.
 - **Verification ladder**: fmt → check → clippy → tests (nextest when
   available). It stops at the first step with errors; warnings don't stop it.
-- **Result cache**: a BLAKE3 key over the relevant sources, toolchain and
-  environment. An unchanged state answers from the cache in ~100 ms.
+- **Result cache**: a BLAKE3 key over the relevant sources, toolchain,
+  features/target and environment. An unchanged state answers from the cache
+  in ~55 ms (~13 ms through the daemon).
 - **LLM compression**: diagnostics are deduplicated, the first real error is
   shown first, cascades are marked "possibly derived", and the output always
   fits a token budget.
@@ -34,9 +35,15 @@ Requires a stable Rust toolchain (MSRV 1.89) and `git`.
 `cargo-nextest` is optional.
 
 ```sh
+cargo install orq-cli                    # from crates.io (once published); installs `orq`
+# or from source:
 git clone https://github.com/circe07/orq && cd orq
-cargo install --path crates/orq-cli      # installs the `orq` binary
+cargo install --path crates/orq-cli
 ```
+
+Prebuilt binaries for Linux and macOS (x86_64/aarch64) are attached to each
+GitHub release, and there is a Homebrew formula template in `packaging/homebrew/`
+(see [`docs/release.md`](docs/release.md)).
 
 ## Usage
 
@@ -46,6 +53,8 @@ orq verify --files src/lib.rs      # explicit files (relative to the current dir
 orq verify --up-to check           # stop after `cargo check`
 orq verify --budget 500 --json     # structured output, smaller budget
 orq verify --no-cache              # ignore the result cache
+orq verify --features serde --target wasm32-unknown-unknown
+orq verify --all-features          # also --no-default-features
 
 orq explain E0308                  # short `rustc --explain`
 
@@ -67,7 +76,9 @@ Exit codes: `0` pass, `1` verification failed, `2` internal error.
 claude mcp add orq -- orq mcp
 ```
 
-The server exposes four tools:
+`orq mcp` starts a daemon for the workspace automatically, so repeated
+verifications stay warm. Set `autostart_daemon = false` in `orq.toml` or
+`ORQ_NO_DAEMON=1` to turn that off. The server exposes four tools:
 - `verify`: arguments `files?`, `up_to?`, `budget?`.
 - `run_affected_tests`
 - `explain_error`
@@ -86,6 +97,13 @@ up_to = "test"         # default last step: fmt | check | clippy | test
 lang = "en"            # report language: "en" | "es"
 nextest = "auto"       # "auto" | "always" | "never"
 ignore = ["docs/**"]   # changes to these paths are ignored (* and ** globs)
+autostart_daemon = true
+
+[build]                # passed to check/clippy/test (not fmt)
+features = ["serde"]
+all_features = false
+no_default_features = false
+target = "x86_64-unknown-linux-gnu"
 ```
 
 Environment variables:
@@ -105,7 +123,7 @@ summary.
 | --- | --- | ---: | ---: |
 | `fixtures/multi` | `cargo build && cargo test` | 407 ms | 586 |
 | `fixtures/multi` | `orq verify` (full ladder) | 827 ms | 16 |
-| `fixtures/multi` | `orq verify`, unchanged (cache) | 143 ms | 16 |
+| `fixtures/multi` | `orq verify`, unchanged (cache) | 143 ms (55 ms since v0.3.0) | 16 |
 | ripgrep | `cargo build && cargo test` | 4.4 s | 4724 |
 | ripgrep | `orq verify` (full ladder) | 6.6 s | 83 |
 | ripgrep | `orq verify --up-to check`, unchanged (cache) | ~0.15 s | 22 |
@@ -130,6 +148,15 @@ cache and the daemon: a cached `verify` through the daemon answers in ~13 ms.
 `fixtures/` holds the standalone test workspaces, which are not part of this
 workspace. [`PLAN.md`](PLAN.md) is the design, and
 [`docs/progress.md`](docs/progress.md) is the build log.
+
+**Security.** Only the user who started the daemon can reach it. The socket
+lives in a private directory: `$XDG_RUNTIME_DIR`, or a `0700` directory
+under the temp dir that must be owned by you and must not be a symlink. The
+socket file itself is `0600`. The daemon checks each connection's peer uid and
+closes anything that doesn't match its own without reading it; if it can't read
+the credentials, it refuses the connection. Requests are limited to 1 MiB and
+30 s, so a local process can't wedge the daemon. The client also refuses to
+connect to a socket in a directory that fails these checks.
 
 Limitations: the daemon is Unix-only for now. On Windows, `verify` always runs
 in-process.

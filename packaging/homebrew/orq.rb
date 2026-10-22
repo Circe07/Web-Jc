@@ -13,7 +13,7 @@
 class Orq < Formula
   desc "Rust build orchestrator for AI agents: verify changes fast, in few tokens"
   homepage "https://github.com/circe07/orq"
-  version "0.2.0"
+  version "0.3.0"
   license any_of: ["MIT", "Apache-2.0"]
 
   on_macos do

@@ -4,6 +4,34 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-10-22
+
+### Added
+- Feature and target selection: `orq verify --features/--all-features/--no-default-features/--target`,
+  the same arguments on the MCP `verify` and `run_affected_tests` tools, and
+  `[build]` in `orq.toml`. They are passed to check, clippy and test, and are
+  part of the cache key.
+- `orq mcp` starts a daemon for the workspace automatically
+  (`autostart_daemon`, default on; `ORQ_NO_DAEMON=1` disables it).
+- Release workflow: binaries for Linux and macOS (x86_64/aarch64) with
+  checksums on every `v*` tag, a manual crates.io publish job, and a Homebrew
+  formula template. All crates can now be packaged, and CI checks that.
+
+### Changed
+- One compile instead of two: when the ladder reaches clippy, a single
+  `cargo clippy` run covers both the check and clippy steps. `cargo fmt` runs
+  in parallel with it.
+- The output of `rustc -Vv` is saved in the cache database, keyed by a
+  toolchain fingerprint, and file hashes are reused when size, mtime, ctime and
+  inode are unchanged (with a 2 s racy-write window). A cached `orq verify`
+  went from ~130 ms to ~55 ms, and a cache key on a warm db from ~100 ms to
+  ~2–6 ms.
+
+### Security
+- The daemon socket lives in a private `0700` directory, the socket is `0600`,
+  peer uids are verified, and requests are capped at 1 MiB / 30 s. The client
+  won't connect through an insecure directory.
+
 ## [0.2.0] - 2026-10-22
 
 ### Added

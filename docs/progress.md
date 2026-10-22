@@ -151,3 +151,53 @@ Known limitations:
 - `rustc -Vv` costs ~70 ms per in-process run.
 - The `v0.1.0` and `v0.2.0` tags only exist locally: this session can only
   push to its branch.
+
+## Wave 4 — Performance, security, real projects and distribution · closed 2026-10-22 · `v0.3.0`
+
+Before launching, the lead added these contracts to `orq-core`:
+- `BuildOptions`, in `orq.toml` `[build]` and on `VerifyRequest.build`, and
+  already part of the cache key.
+- `Config.autostart_daemon`.
+- `ipc::prepare_socket_dir`: a private 0700 directory, checked by both the
+  daemon and the client.
+
+While doing this the lead found and fixed a race in the owner check: the
+probe file was shared by parallel tests in the same process.
+
+| Task | Result | New tests |
+| --- | --- | --- |
+| T4.1 daemon security | socket 0600, peer-uid check that refuses when credentials are unknown, requests capped at 1 MiB / 30 s | 5 |
+| T4.2 runner | one `cargo clippy` for check and clippy, fmt in parallel, `BuildOptions` passed to cargo | 3 |
+| T4.3 cache | `rustc -Vv` memo keyed by toolchain fingerprint, file index (size, mtime, ctime, inode; 2 s racy window), key format v2 | 8 |
+| T4.4 CLI/MCP | `--features/--all-features/--no-default-features/--target` and MCP arguments; daemon autostart from `orq mcp`; `client::spawn_daemon` | 7 |
+| T4.5 distribution | `release.yml` (4 targets, checksums, notes from CHANGELOG), manual crates.io publish job, Homebrew formula, `docs/release.md`, CI `package` job | — |
+
+Measurements (release build):
+
+| Case | Before | After |
+| --- | --- | --- |
+| Cached `orq verify` without the daemon (`multi`) | ~130 ms | **54–58 ms** |
+| Cache key, fresh process with a warm db (ripgrep `full_rebuild`) | 103–170 ms | 3–7 ms |
+| Cold `orq verify` on `multi` | 1.1 s | 0.8 s (baseline `cargo build && cargo test`: 0.7 s) |
+| Cold `orq verify` on ripgrep | 30.2 s | 26.6 s (baseline: 19.4 s) |
+
+End-to-end check by the lead: `orq verify --features x` on a crate with
+`#[cfg(feature = "x")] compile_error!` reports `FAIL check` with "x on";
+without the flag it passes.
+
+Fixed during integration:
+- The cache index tests failed on macOS. `fs::copy` preserves the mtime
+  there, so the copied fixture looked settled and got indexed. The test helper
+  now writes the files instead of copying them; production code was correct.
+
+Open items:
+- A cold run on large projects is still ~37% slower than the baseline, because
+  of `--all-targets` plus fmt and tests. Possible next steps: drop
+  `all_targets` for the clippy step, or make it configurable.
+- `--all-targets` breaks on crates whose benches need nightly (ripgrep's
+  globset fails with E0554). This needs a config option, for example
+  `all_targets = false` or excluding benches.
+- Not done yet: finer test selection, measuring compression quality with real
+  tasks, and named pipes on Windows.
+- Publishing to crates.io and creating releases need a manual step (a tag
+  pushed by the owner and a `CARGO_REGISTRY_TOKEN`).
