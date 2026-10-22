@@ -38,7 +38,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Tests
-insta = { version = "1", features = ["json"] }
+insta = { version = "1", features = ["json", "redactions", "filters"] }
 tempfile = "3"
 assert_cmd = "2"
 predicates = "3"
