@@ -4,8 +4,10 @@
 //! outcome of a verification (see [`RedbCache`] for the exact list). Results
 //! are stored as JSON in a [`redb`] database, with a simple LRU bound.
 
+mod index;
 mod inputs;
 mod store;
+mod toolchain;
 
 pub use store::RedbCache;
 
