@@ -1,0 +1,51 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+exclude = ["fixtures"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/circe07/web-jc"
+rust-version = "1.85"
+
+[workspace.dependencies]
+# Internal crates
+orq-core = { path = "crates/orq-core" }
+orq-impact = { path = "crates/orq-impact" }
+orq-runner = { path = "crates/orq-runner" }
+orq-compress = { path = "crates/orq-compress" }
+orq-cache = { path = "crates/orq-cache" }
+orq-daemon = { path = "crates/orq-daemon" }
+orq-mcp = { path = "crates/orq-mcp" }
+
+# External (see PLAN.md §3)
+cargo_metadata = "0.23"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "process", "macros", "net", "fs", "sync", "time", "io-util"] }
+notify = "8"
+notify-debouncer-full = "0.7"
+clap = { version = "4", features = ["derive"] }
+blake3 = "1"
+redb = "4"
+rmcp = { version = "3", features = ["server", "transport-io"] }
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Tests
+insta = { version = "1", features = ["json"] }
+tempfile = "3"
+assert_cmd = "2"
+predicates = "3"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
