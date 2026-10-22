@@ -63,8 +63,12 @@ benches/compare.sh /tmp/orq-bench/rg 3
   `cargo build && cargo test`, so a cold-ish single edit costs 1.4x to 2x
   more. The time benefit is expected from the daemon and the result cache, not
   from `--no-daemon`.
-- **Cache hit works on `multi`** (about 3x faster than the baseline) **but did
-  not hit on ripgrep**: the repeated run recomputed (`cache_hit: false` in
-  `target/orq/stats.jsonl`, ~3.5 s). This needs investigation in the
-  runner/cache layer; the benchmark only exposes it.
+- **Cache hit works on `multi`**, about 3x faster than the baseline. On
+  ripgrep the repeated run above still recomputed (~3.5 s). The cause was a
+  tracked symlink to a directory (`HomebrewFormula`): reading it for the cache
+  key failed with `EISDIR`, and that silently disabled the cache. Fixed in
+  `orq-cache`: symlinks are now hashed by their target and directories are
+  skipped. After the fix, the repeated `orq verify --up-to check` on ripgrep is
+  a cache hit in 125–171 ms (release build). The ripgrep table above was
+  measured before the fix.
 - Not measured: daemon mode, `--up-to check`, and nextest.

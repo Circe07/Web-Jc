@@ -300,3 +300,30 @@ fn key_is_fast_on_multi_fixture() {
     let elapsed = start.elapsed();
     assert!(elapsed.as_millis() < 100, "key took {elapsed:?}");
 }
+
+/// A tracked symlink to a directory (ripgrep's `HomebrewFormula`) must not
+/// break the key; its target is what counts.
+#[cfg(unix)]
+#[test]
+fn tracked_symlink_to_directory_is_hashed_by_target() {
+    let ws = workspace(true);
+    let leaf = ws.root.join("crates/leaf");
+    std::fs::create_dir_all(leaf.join("real")).unwrap();
+    std::os::unix::fs::symlink("real", leaf.join("link")).unwrap();
+    let status = Command::new("git")
+        .args(["add", "-A"])
+        .current_dir(&ws.root)
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let db = tempfile::tempdir().unwrap();
+    let c = cache(&db);
+    let i = impact(&ws, &["leaf"], &[]);
+    let first = key_of(&c, &ws, &i);
+    assert_eq!(first, key_of(&c, &ws, &i));
+
+    std::fs::remove_file(leaf.join("link")).unwrap();
+    std::os::unix::fs::symlink("src", leaf.join("link")).unwrap();
+    assert_ne!(first, key_of(&c, &ws, &i));
+}

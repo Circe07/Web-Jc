@@ -205,11 +205,8 @@ impl ResultCache for RedbCache {
 
         for rel in collect_files(root, impact)? {
             let abs = root.join(&rel);
-            let bytes = match std::fs::read(&abs) {
-                Ok(b) => b,
-                // Tracked but deleted in the work tree: contributes nothing.
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(e) => return Err(CoreError::io(abs, e)),
+            let Some(bytes) = file_fingerprint(&abs)? else {
+                continue;
             };
             field(&mut h, rel.to_string_lossy().as_bytes());
             field(&mut h, &bytes);
@@ -266,6 +263,30 @@ impl ResultCache for RedbCache {
         }
         txn.commit().map_err(cache_err)
     }
+}
+
+/// What a listed path contributes to the key: file contents, `symlink:` +
+/// target for symlinks (git tracks the link, not what it points to), or
+/// `None` for paths that are gone or are directories (e.g. submodules).
+fn file_fingerprint(abs: &Path) -> Result<Option<Vec<u8>>, CoreError> {
+    let meta = match std::fs::symlink_metadata(abs) {
+        Ok(m) => m,
+        // Tracked but deleted in the work tree: contributes nothing.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(CoreError::io(abs, e)),
+    };
+    if meta.file_type().is_symlink() {
+        let target = std::fs::read_link(abs).map_err(|e| CoreError::io(abs, e))?;
+        let mut bytes = b"symlink:".to_vec();
+        bytes.extend_from_slice(target.to_string_lossy().as_bytes());
+        return Ok(Some(bytes));
+    }
+    if meta.is_dir() {
+        return Ok(None);
+    }
+    std::fs::read(abs)
+        .map(Some)
+        .map_err(|e| CoreError::io(abs, e))
 }
 
 /// Records `key` as the most recently used entry.
