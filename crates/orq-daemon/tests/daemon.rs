@@ -187,3 +187,48 @@ async fn stale_socket_is_replaced() {
     wait_ready(&root).await;
     stop(&root, handle).await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn socket_file_is_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_dir, root) = fixture();
+    let handle = start(&root, DaemonOptions::default());
+    wait_ready(&root).await;
+    let mode = std::fs::metadata(ipc::socket_path(&root))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o600);
+    stop(&root, handle).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn oversized_request_is_dropped_and_daemon_survives() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let (_dir, root) = fixture();
+    let handle = start(&root, DaemonOptions::default());
+    wait_ready(&root).await;
+
+    let mut stream = tokio::net::UnixStream::connect(ipc::socket_path(&root))
+        .await
+        .unwrap();
+    let chunk = vec![b'a'; 64 * 1024];
+    // 2 MiB without a newline; the daemon may close early, so ignore write errors.
+    for _ in 0..32 {
+        if stream.write_all(&chunk).await.is_err() {
+            break;
+        }
+    }
+    let mut buf = Vec::new();
+    let read = tokio::time::timeout(Duration::from_secs(10), stream.read_to_end(&mut buf))
+        .await
+        .expect("daemon should disconnect");
+    // Either a clean EOF or a reset; never a response.
+    assert!(read.is_err() || buf.is_empty(), "got a response: {buf:?}");
+
+    assert!(matches!(
+        request(&root, DaemonRequest::Status).await.unwrap(),
+        Some(DaemonResponse::Status(_))
+    ));
+    stop(&root, handle).await;
+}

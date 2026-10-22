@@ -1,9 +1,24 @@
 //! Unix implementation of the daemon.
+//!
+//! # Security model
+//!
+//! Only the user who started the daemon can talk to it:
+//!
+//! - The socket lives in a private directory (`ipc::prepare_socket_dir`, mode
+//!   0700, owned by the user, never a symlink) and the socket file itself is
+//!   set to mode 0600 right after `bind`, before anything is accepted.
+//! - Every accepted connection is checked with `SO_PEERCRED`/`LOCAL_PEERCRED`
+//!   (`peer_cred`). A peer whose uid differs from the daemon's is closed
+//!   without reading a byte; if the credentials cannot be obtained the
+//!   connection is refused (fail closed).
+//! - Requests are one JSON line, capped at 1 MiB and 30 s. Clients exceeding
+//!   either limit are dropped, so a local process cannot wedge handlers.
 
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use notify::{EventKind, RecursiveMode};
 use notify_debouncer_full::{new_debouncer, DebounceEventResult};
@@ -15,11 +30,22 @@ use orq_core::{
 };
 use orq_impact::CargoImpactAnalyzer;
 use orq_runner::Runner;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{mpsc, watch, Mutex, Notify};
 
 use crate::DaemonOptions;
+
+/// Largest accepted request line, in bytes.
+const MAX_REQUEST_BYTES: u64 = 1024 * 1024;
+/// How long a client may take to deliver its request line.
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Whether a peer with uid `peer` (if known) may talk to a daemon owned by
+/// `own`. Unknown credentials are refused.
+fn peer_allowed(peer: Option<u32>, own: u32) -> bool {
+    peer == Some(own)
+}
 
 type DaemonPipeline = Pipeline<CargoImpactAnalyzer, Runner, RedbCache, LlmCompressor>;
 
@@ -88,6 +114,11 @@ pub(crate) async fn serve(root: &Path, options: DaemonOptions) -> Result<(), Cor
 
     let listener = UnixListener::bind(&socket).map_err(|e| CoreError::io(&socket, e))?;
     let _guard = SocketGuard(socket.clone());
+    std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))
+        .map_err(|e| CoreError::io(&socket, e))?;
+    let own_uid = std::fs::metadata(&socket)
+        .map_err(|e| CoreError::io(&socket, e))?
+        .uid();
 
     let pipeline = Pipeline {
         analyzer: CargoImpactAnalyzer::new(config.clone()),
@@ -159,7 +190,16 @@ pub(crate) async fn serve(root: &Path, options: DaemonOptions) -> Result<(), Cor
                     idle.as_mut().reset(tokio::time::Instant::now() + options.idle_timeout);
                     let shared = Arc::clone(&shared);
                     tokio::spawn(async move {
-                        handle_connection(&shared, stream).await;
+                        match stream.peer_cred() {
+                            Ok(cred) if peer_allowed(Some(cred.uid()), own_uid) => {
+                                handle_connection(&shared, stream).await;
+                            }
+                            Ok(cred) => tracing::warn!(
+                                "rejected connection from uid {} (daemon uid {own_uid})",
+                                cred.uid()
+                            ),
+                            Err(e) => tracing::warn!("rejected connection, no peer credentials: {e}"),
+                        }
                         shared.in_flight.fetch_sub(1, Ordering::SeqCst);
                         shared.activity.notify_one();
                     });
@@ -266,8 +306,20 @@ async fn warm_up(shared: &Arc<Shared>) -> Result<(), CoreError> {
 async fn handle_connection(shared: &Arc<Shared>, stream: UnixStream) {
     let (read, mut write) = stream.into_split();
     let mut line = String::new();
-    if let Err(e) = BufReader::new(read).read_line(&mut line).await {
-        tracing::warn!("could not read request: {e}");
+    let mut reader = BufReader::new(read.take(MAX_REQUEST_BYTES));
+    match tokio::time::timeout(READ_TIMEOUT, reader.read_line(&mut line)).await {
+        Err(_) => {
+            tracing::warn!("dropping client: no complete request within {READ_TIMEOUT:?}");
+            return;
+        }
+        Ok(Err(e)) => {
+            tracing::warn!("could not read request: {e}");
+            return;
+        }
+        Ok(Ok(_)) => {}
+    }
+    if !line.ends_with('\n') && line.len() as u64 >= MAX_REQUEST_BYTES {
+        tracing::warn!("dropping client: request exceeds {MAX_REQUEST_BYTES} bytes");
         return;
     }
     shared.requests.fetch_add(1, Ordering::SeqCst);
@@ -334,4 +386,25 @@ fn parse_request(line: &str) -> Result<DaemonRequest, String> {
         return Err("empty request".into());
     }
     serde_json::from_str(line.trim()).map_err(|e| format!("bad request: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::peer_allowed;
+
+    #[test]
+    fn same_uid_is_allowed() {
+        assert!(peer_allowed(Some(1000), 1000));
+    }
+
+    #[test]
+    fn other_uid_is_refused() {
+        assert!(!peer_allowed(Some(1001), 1000));
+        assert!(!peer_allowed(Some(0), 1000));
+    }
+
+    #[test]
+    fn unknown_credentials_are_refused() {
+        assert!(!peer_allowed(None, 1000));
+    }
 }
