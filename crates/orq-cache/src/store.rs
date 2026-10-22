@@ -1,16 +1,19 @@
 //! The redb-backed [`ResultCache`] implementation.
 
+use std::collections::BTreeSet;
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::OnceLock;
+use std::sync::Mutex;
 
 use orq_core::{
     BuildOptions, CacheKey, CoreError, ImpactSet, ResultCache, Step, VerifyResult, ORQ_VERSION,
 };
 use redb::{Database, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition};
 
+use crate::index::{now_ns, Entry, Stamp};
 use crate::inputs::{collect_files, relevant_env, GLOBAL_FILES};
+use crate::toolchain;
 
 /// Serialized `VerifyResult`s by key.
 const DATA: TableDefinition<&[u8], &[u8]> = TableDefinition::new("results");
@@ -19,12 +22,39 @@ const ACCESS: TableDefinition<&[u8], u64> = TableDefinition::new("access");
 /// Single-row table holding the last issued tick.
 const META: TableDefinition<&str, u64> = TableDefinition::new("meta");
 const TICK_ROW: &str = "tick";
+/// Memoized `rustc -Vv` output by toolchain fingerprint (see `toolchain`).
+const TOOLCHAIN: TableDefinition<&[u8], &[u8]> = TableDefinition::new("toolchain");
+/// Per-file content hashes: key = root id (16 bytes) ++ relative path.
+const FILES: TableDefinition<&[u8], &[u8]> = TableDefinition::new("file_index");
+/// Rows kept in the toolchain / file tables before they are reset.
+const MAX_TOOLCHAINS: u64 = 32;
+const MAX_INDEXED_FILES: u64 = 200_000;
 
 /// Default maximum number of stored entries.
 const DEFAULT_MAX_ENTRIES: usize = 5000;
 
 /// Boxed source of environment variables.
 type EnvSource = Box<dyn Fn() -> Vec<(String, String)> + Send + Sync>;
+
+/// Boxed `rustc -Vv` runner: takes the program, returns its stdout.
+type RustcRunner = Box<dyn Fn(&str) -> Result<String, CoreError> + Send + Sync>;
+
+fn run_rustc(program: &str) -> Result<String, CoreError> {
+    let out = Command::new(program)
+        .arg("-Vv")
+        .output()
+        .map_err(|e| CoreError::Process {
+            command: format!("{program} -Vv"),
+            message: e.to_string(),
+        })?;
+    if !out.status.success() {
+        return Err(CoreError::Process {
+            command: format!("{program} -Vv"),
+            message: format!("exited with {}", out.status),
+        });
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
 
 fn cache_err<E: Display>(e: E) -> CoreError {
     CoreError::Cache(e.to_string())
@@ -34,12 +64,13 @@ fn cache_err<E: Display>(e: E) -> CoreError {
 ///
 /// The key ([`ResultCache::key`]) is the BLAKE3 hash of, in order:
 /// the orq version and `up_to`; the `full_rebuild` flag; the relative path and
-/// contents of every file of the crates in `changed ∪ dependents` (or of the
+/// content hash of every file of the crates in `changed ∪ dependents` (or of the
 /// whole workspace on `full_rebuild`), taken from `git ls-files` (tracked plus
 /// untracked-not-ignored) or, outside git, from a directory walk skipping
 /// `target/` and hidden directories; the root `Cargo.lock`, `Cargo.toml`,
 /// `rust-toolchain[.toml]` and `.cargo/config[.toml]` (presence included); the
-/// output of `rustc -Vv` (memoized per instance, honours `RUSTC`); and the
+/// output of `rustc -Vv` (honours `RUSTC`; memoized in the database under a
+/// toolchain fingerprint, see the `toolchain` module); and the
 /// environment variables `RUSTFLAGS`, `RUSTDOCFLAGS`, `RUSTC`, `RUSTC_WRAPPER`,
 /// `RUSTC_WORKSPACE_WRAPPER`, `RUSTUP_TOOLCHAIN`, `CARGO_ENCODED_RUSTFLAGS`,
 /// `CARGO_INCREMENTAL` and any `CARGO_BUILD_*`, `CARGO_PROFILE_*`,
@@ -47,12 +78,17 @@ fn cache_err<E: Display>(e: E) -> CoreError {
 /// `CARGO_TARGET_DIR`, `CARGO_BUILD_TARGET_DIR`, `CARGO_BUILD_BUILD_DIR` and
 /// `CARGO_BUILD_JOBS`), sorted by name.
 ///
+/// File content hashes are kept in the database and reused across processes
+/// while size, mtime, ctime and inode are unchanged and the mtime is over 2 s
+/// old (see the `index` module). The key format tag is `orq-cache-key-v2`.
+///
 /// Stored entries are bounded (default 5000) with least-recently-used
 /// eviction.
 pub struct RedbCache {
     db: Database,
     max_entries: usize,
-    rustc_version: OnceLock<String>,
+    rustc_memo: Mutex<Option<([u8; 32], String)>>,
+    rustc_runner: RustcRunner,
     env: EnvSource,
 }
 
@@ -89,7 +125,8 @@ impl RedbCache {
         Ok(Self {
             db,
             max_entries: DEFAULT_MAX_ENTRIES,
-            rustc_version: OnceLock::new(),
+            rustc_memo: Mutex::new(None),
+            rustc_runner: Box::new(run_rustc),
             env: Box::new(|| std::env::vars().collect()),
         })
     }
@@ -110,6 +147,16 @@ impl RedbCache {
         self
     }
 
+    /// Replaces the function that runs `rustc -Vv` (default: spawning the
+    /// program). Mainly useful in tests, to count invocations.
+    pub fn with_rustc_runner(
+        mut self,
+        runner: impl Fn(&str) -> Result<String, CoreError> + Send + Sync + 'static,
+    ) -> Self {
+        self.rustc_runner = Box::new(runner);
+        self
+    }
+
     /// Number of stored entries.
     pub fn len(&self) -> Result<usize, CoreError> {
         let txn = self.db.begin_read().map_err(cache_err)?;
@@ -125,32 +172,171 @@ impl RedbCache {
         Ok(self.len()? == 0)
     }
 
-    fn rustc_version(&self, env: &[(String, String)]) -> Result<&str, CoreError> {
-        if let Some(v) = self.rustc_version.get() {
-            return Ok(v);
+    /// Number of rows of the file hash index (tests only).
+    #[cfg(test)]
+    pub(crate) fn indexed_files(&self) -> usize {
+        let Ok(txn) = self.db.begin_read() else {
+            return 0;
+        };
+        match txn.open_table(FILES) {
+            Ok(t) => usize::try_from(t.len().unwrap_or(0)).unwrap_or(0),
+            Err(_) => 0,
         }
+    }
+
+    /// `rustc -Vv`, from the in-process memo, the database or a fresh run,
+    /// keyed by the toolchain fingerprint.
+    fn rustc_version(&self, root: &Path, env: &[(String, String)]) -> Result<String, CoreError> {
         let program = env
             .iter()
             .find(|(k, _)| k == "RUSTC")
             .map(|(_, v)| v.clone())
             .filter(|v| !v.is_empty())
             .unwrap_or_else(|| "rustc".to_owned());
-        let out = Command::new(&program)
-            .arg("-Vv")
-            .output()
-            .map_err(|e| CoreError::Process {
-                command: format!("{program} -Vv"),
-                message: e.to_string(),
-            })?;
-        if !out.status.success() {
-            return Err(CoreError::Process {
-                command: format!("{program} -Vv"),
-                message: format!("exited with {}", out.status),
-            });
+        let fp = toolchain::fingerprint(root, &program, env);
+        if let Ok(memo) = self.rustc_memo.lock() {
+            if let Some((f, text)) = memo.as_ref() {
+                if *f == fp {
+                    return Ok(text.clone());
+                }
+            }
         }
-        let text = String::from_utf8_lossy(&out.stdout).into_owned();
-        Ok(self.rustc_version.get_or_init(|| text))
+        let text = match self.stored_rustc(&fp) {
+            Some(t) => t,
+            None => {
+                let t = (self.rustc_runner)(&program)?;
+                if let Err(e) = self.store_rustc(&fp, &t) {
+                    tracing::warn!("cannot persist rustc version: {e}");
+                }
+                t
+            }
+        };
+        if let Ok(mut memo) = self.rustc_memo.lock() {
+            *memo = Some((fp, text.clone()));
+        }
+        Ok(text)
     }
+
+    fn stored_rustc(&self, fp: &[u8; 32]) -> Option<String> {
+        let txn = self.db.begin_read().ok()?;
+        let table = txn.open_table(TOOLCHAIN).ok()?;
+        let v = table.get(fp.as_slice()).ok()??;
+        String::from_utf8(v.value().to_vec()).ok()
+    }
+
+    fn store_rustc(&self, fp: &[u8; 32], text: &str) -> Result<(), CoreError> {
+        let txn = self.db.begin_write().map_err(cache_err)?;
+        {
+            let mut t = txn.open_table(TOOLCHAIN).map_err(cache_err)?;
+            if t.len().map_err(cache_err)? >= MAX_TOOLCHAINS {
+                clear_table(&mut t)?;
+            }
+            t.insert(fp.as_slice(), text.as_bytes())
+                .map_err(cache_err)?;
+        }
+        txn.commit().map_err(cache_err)
+    }
+
+    /// Content hashes of `files` (relative to `root`), in order, skipping
+    /// paths that contribute nothing. Uses and refreshes the file index.
+    fn hash_files(
+        &self,
+        root: &Path,
+        files: &BTreeSet<PathBuf>,
+    ) -> Result<Vec<(PathBuf, [u8; 32])>, CoreError> {
+        let root_id = {
+            let canon = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+            let h = blake3::hash(canon.to_string_lossy().as_bytes());
+            let mut id = [0u8; 16];
+            id.copy_from_slice(&h.as_bytes()[..16]);
+            id
+        };
+        let now = now_ns();
+        let read = self.db.begin_read().map_err(cache_err)?;
+        let table = match read.open_table(FILES) {
+            Ok(t) => Some(t),
+            Err(redb::TableError::TableDoesNotExist(_)) => None,
+            Err(e) => return Err(cache_err(e)),
+        };
+        let mut out = Vec::with_capacity(files.len());
+        let mut updates: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+        for rel in files {
+            let abs = root.join(rel);
+            let meta = match std::fs::symlink_metadata(&abs) {
+                Ok(m) => m,
+                // Tracked but deleted in the work tree: contributes nothing.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(CoreError::io(&abs, e)),
+            };
+            if meta.file_type().is_symlink() {
+                // Git tracks the link, not what it points to.
+                let target = std::fs::read_link(&abs).map_err(|e| CoreError::io(&abs, e))?;
+                let mut bytes = b"symlink:".to_vec();
+                bytes.extend_from_slice(target.to_string_lossy().as_bytes());
+                out.push((rel.clone(), *blake3::hash(&bytes).as_bytes()));
+                continue;
+            }
+            if meta.is_dir() {
+                continue;
+            }
+            let stamp = Stamp::of(&meta);
+            let mut key = root_id.to_vec();
+            key.extend_from_slice(rel.to_string_lossy().as_bytes());
+            let cached = match &table {
+                Some(t) if stamp.settled(now) => t
+                    .get(key.as_slice())
+                    .map_err(cache_err)?
+                    .and_then(|v| Entry::decode(v.value()))
+                    .filter(|e| e.stamp == stamp),
+                _ => None,
+            };
+            if let Some(e) = cached {
+                out.push((rel.clone(), e.hash));
+                continue;
+            }
+            let bytes = std::fs::read(&abs).map_err(|e| CoreError::io(&abs, e))?;
+            let hash = *blake3::hash(&bytes).as_bytes();
+            if stamp.settled(now) {
+                updates.push((key, Entry { stamp, hash }.encode()));
+            }
+            out.push((rel.clone(), hash));
+        }
+        drop(table);
+        drop(read);
+        if !updates.is_empty() {
+            if let Err(e) = self.store_hashes(&updates) {
+                tracing::warn!("cannot update file index: {e}");
+            }
+        }
+        Ok(out)
+    }
+
+    fn store_hashes(&self, updates: &[(Vec<u8>, Vec<u8>)]) -> Result<(), CoreError> {
+        let txn = self.db.begin_write().map_err(cache_err)?;
+        {
+            let mut t = txn.open_table(FILES).map_err(cache_err)?;
+            if t.len().map_err(cache_err)? >= MAX_INDEXED_FILES {
+                clear_table(&mut t)?;
+            }
+            for (k, v) in updates {
+                t.insert(k.as_slice(), v.as_slice()).map_err(cache_err)?;
+            }
+        }
+        txn.commit().map_err(cache_err)
+    }
+}
+
+/// Removes every row of `t`.
+fn clear_table(t: &mut redb::Table<&[u8], &[u8]>) -> Result<(), CoreError> {
+    let keys: Vec<Vec<u8>> = t
+        .iter()
+        .map_err(cache_err)?
+        .filter_map(|r| r.ok().map(|(k, _)| k.value().to_vec()))
+        .collect();
+    for k in keys {
+        t.remove(k.as_slice()).map_err(cache_err)?;
+    }
+    Ok(())
 }
 
 fn fallback_path(root: &Path) -> PathBuf {
@@ -183,11 +369,12 @@ impl ResultCache for RedbCache {
         up_to: Step,
         build: &BuildOptions,
     ) -> Result<CacheKey, CoreError> {
-        let env = relevant_env((self.env)());
-        let rustc = self.rustc_version(&env)?;
+        let all_env = (self.env)();
+        let rustc = self.rustc_version(root, &all_env)?;
+        let env = relevant_env(all_env);
 
         let mut h = blake3::Hasher::new();
-        field(&mut h, b"orq-cache-key-v1");
+        field(&mut h, b"orq-cache-key-v2");
         field(&mut h, ORQ_VERSION.as_bytes());
         field(&mut h, up_to.as_str().as_bytes());
         field(&mut h, &[u8::from(impact.full_rebuild)]);
@@ -214,13 +401,9 @@ impl ResultCache for RedbCache {
             }
         }
 
-        for rel in collect_files(root, impact)? {
-            let abs = root.join(&rel);
-            let Some(bytes) = file_fingerprint(&abs)? else {
-                continue;
-            };
+        for (rel, hash) in self.hash_files(root, &collect_files(root, impact)?)? {
             field(&mut h, rel.to_string_lossy().as_bytes());
-            field(&mut h, &bytes);
+            h.update(&hash);
         }
         Ok(CacheKey(*h.finalize().as_bytes()))
     }
@@ -274,30 +457,6 @@ impl ResultCache for RedbCache {
         }
         txn.commit().map_err(cache_err)
     }
-}
-
-/// What a listed path contributes to the key: file contents, `symlink:` +
-/// target for symlinks (git tracks the link, not what it points to), or
-/// `None` for paths that are gone or are directories (e.g. submodules).
-fn file_fingerprint(abs: &Path) -> Result<Option<Vec<u8>>, CoreError> {
-    let meta = match std::fs::symlink_metadata(abs) {
-        Ok(m) => m,
-        // Tracked but deleted in the work tree: contributes nothing.
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(CoreError::io(abs, e)),
-    };
-    if meta.file_type().is_symlink() {
-        let target = std::fs::read_link(abs).map_err(|e| CoreError::io(abs, e))?;
-        let mut bytes = b"symlink:".to_vec();
-        bytes.extend_from_slice(target.to_string_lossy().as_bytes());
-        return Ok(Some(bytes));
-    }
-    if meta.is_dir() {
-        return Ok(None);
-    }
-    std::fs::read(abs)
-        .map(Some)
-        .map_err(|e| CoreError::io(abs, e))
 }
 
 /// Records `key` as the most recently used entry.

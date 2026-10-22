@@ -361,3 +361,227 @@ fn tracked_symlink_to_directory_is_hashed_by_target() {
     std::os::unix::fs::symlink("src", leaf.join("link")).unwrap();
     assert_ne!(first, key_of(&c, &ws, &i));
 }
+
+// ---- rustc memo (toolchain fingerprint) ----
+
+fn set_mtime(path: &Path, secs_ago: u64) {
+    let t = std::time::SystemTime::now() - std::time::Duration::from_secs(secs_ago);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(t)
+        .unwrap();
+}
+
+/// Makes every file under `dir` (except `.git`) look old.
+fn age_all(dir: &Path) {
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_name() == ".git" {
+            continue;
+        }
+        if entry.file_type().unwrap().is_dir() {
+            age_all(&entry.path());
+        } else if entry.file_type().unwrap().is_file() {
+            set_mtime(&entry.path(), 3600);
+        }
+    }
+}
+
+type Counter = std::sync::Arc<std::sync::atomic::AtomicUsize>;
+
+/// A cache on `db` whose `RUSTC` is `fake` and whose runner only counts.
+fn counting_cache(db: &TempDir, fake: &Path, calls: &Counter) -> RedbCache {
+    let vars = vec![("RUSTC".to_owned(), fake.to_string_lossy().into_owned())];
+    let calls = calls.clone();
+    RedbCache::open_at(&db.path().join("cache.redb"))
+        .unwrap()
+        .with_env_source(move || vars.clone())
+        .with_rustc_runner(move |_| {
+            let n = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(format!("fake rustc run {n}\n"))
+        })
+}
+
+fn count(calls: &Counter) -> usize {
+    calls.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+#[test]
+fn rustc_memo_survives_reopening_the_db() {
+    let ws = workspace(true);
+    let i = impact(&ws, &["mid"], &[]);
+    let db = tempfile::tempdir().unwrap();
+    let tools = tempfile::tempdir().unwrap();
+    let fake = tools.path().join("rustc");
+    std::fs::write(&fake, "#!/bin/sh\necho fake\n").unwrap();
+    let calls = Counter::default();
+
+    let k1 = {
+        let c = counting_cache(&db, &fake, &calls);
+        let k = key_of(&c, &ws, &i);
+        assert_eq!(count(&calls), 1);
+        // Same instance: no new run either.
+        assert_eq!(k, key_of(&c, &ws, &i));
+        assert_eq!(count(&calls), 1);
+        k
+    };
+    let c = counting_cache(&db, &fake, &calls);
+    assert_eq!(k1, key_of(&c, &ws, &i));
+    assert_eq!(count(&calls), 1, "second instance must not run rustc");
+}
+
+#[test]
+fn rustc_memo_is_invalidated_by_fake_rustc_changes() {
+    let ws = workspace(true);
+    let i = impact(&ws, &["mid"], &[]);
+    let db = tempfile::tempdir().unwrap();
+    let tools = tempfile::tempdir().unwrap();
+    let fake = tools.path().join("rustc");
+    std::fs::write(&fake, "#!/bin/sh\necho fake\n").unwrap();
+    let calls = Counter::default();
+    let key = || {
+        let c = counting_cache(&db, &fake, &calls);
+        key_of(&c, &ws, &i)
+    };
+
+    let k0 = key();
+    assert_eq!(count(&calls), 1);
+    assert_eq!(k0, {
+        let c = counting_cache(&db, &fake, &calls);
+        // The runner output differs per run, so an equal key proves reuse.
+        key_of(&c, &ws, &i)
+    });
+    assert_eq!(count(&calls), 1);
+
+    // mtime only.
+    set_mtime(&fake, 7200);
+    let k1 = key();
+    assert_eq!(count(&calls), 2, "mtime change must rerun rustc");
+    assert_ne!(k0, k1);
+
+    // content (and size).
+    std::fs::write(&fake, "#!/bin/sh\necho fake, but newer\n").unwrap();
+    let k2 = key();
+    assert_eq!(count(&calls), 3, "content change must rerun rustc");
+    assert_ne!(k1, k2);
+
+    // Stable again afterwards.
+    assert_eq!(k2, key());
+    assert_eq!(count(&calls), 3);
+}
+
+#[test]
+fn rustc_memo_is_invalidated_by_rust_toolchain_file() {
+    let ws = workspace(true);
+    let i = impact(&ws, &["mid"], &[]);
+    let db = tempfile::tempdir().unwrap();
+    let tools = tempfile::tempdir().unwrap();
+    let fake = tools.path().join("rustc");
+    std::fs::write(&fake, "x").unwrap();
+    let calls = Counter::default();
+    let key = || {
+        let c = counting_cache(&db, &fake, &calls);
+        key_of(&c, &ws, &i)
+    };
+    key();
+    key();
+    assert_eq!(count(&calls), 1);
+    std::fs::write(
+        ws.root.join("rust-toolchain.toml"),
+        "[toolchain]\nchannel = \"stable\"\n",
+    )
+    .unwrap();
+    key();
+    assert_eq!(count(&calls), 2);
+}
+
+// ---- file hash index ----
+
+#[test]
+fn recently_written_files_are_never_indexed() {
+    let ws = workspace(true);
+    let i = impact(&ws, &["mid"], &["app"]);
+    let db = tempfile::tempdir().unwrap();
+    let c = cache(&db);
+    // Freshly copied: mtimes are "now", inside the 2 s window.
+    let k0 = key_of(&c, &ws, &i);
+    assert_eq!(c.indexed_files(), 0, "racy files must not be indexed");
+
+    // Rewriting with the same size is still seen (always re-hashed).
+    let lib = ws.root.join("crates/mid/src/lib.rs");
+    let mut bytes = std::fs::read(&lib).unwrap();
+    let last = bytes.len() - 1;
+    bytes[last] = bytes[last].wrapping_add(1);
+    std::fs::write(&lib, &bytes).unwrap();
+    assert_ne!(k0, key_of(&c, &ws, &i));
+    assert_eq!(c.indexed_files(), 0);
+}
+
+#[test]
+fn settled_files_are_indexed_and_key_is_unchanged() {
+    let ws = workspace(true);
+    let i = impact(&ws, &["mid"], &["app"]);
+    let db = tempfile::tempdir().unwrap();
+    let c = cache(&db);
+    let k_cold = key_of(&c, &ws, &i);
+    assert_eq!(c.indexed_files(), 0);
+
+    age_all(&ws.root);
+    let k_aged = key_of(&c, &ws, &i);
+    assert!(c.indexed_files() > 0, "old files should be indexed");
+    assert_eq!(k_cold, k_aged, "indexing must not change the key");
+    assert_eq!(k_aged, key_of(&c, &ws, &i), "index hit gives the same key");
+
+    // A fresh process (instance) with the warm db agrees too.
+    drop(c);
+    let c2 = cache(&db);
+    assert_eq!(k_aged, key_of(&c2, &ws, &i));
+}
+
+#[test]
+fn normal_edit_of_indexed_file_changes_the_key() {
+    let ws = workspace(true);
+    let i = impact(&ws, &["mid"], &["app"]);
+    let db = tempfile::tempdir().unwrap();
+    let c = cache(&db);
+    age_all(&ws.root);
+    let k0 = key_of(&c, &ws, &i);
+    assert!(c.indexed_files() > 0);
+
+    // Edit: same size, new mtime (now).
+    let lib = ws.root.join("crates/mid/src/lib.rs");
+    let mut bytes = std::fs::read(&lib).unwrap();
+    let last = bytes.len() - 1;
+    bytes[last] = bytes[last].wrapping_add(1);
+    std::fs::write(&lib, &bytes).unwrap();
+    let k1 = key_of(&c, &ws, &i);
+    assert_ne!(k0, k1);
+
+    // Edit with a different size, mtime put back to an old value.
+    append(&lib, "// more\n");
+    set_mtime(&lib, 3600);
+    assert_ne!(k1, key_of(&c, &ws, &i));
+}
+
+/// Documented limitation: an edit that keeps the size and restores the old
+/// mtime is invisible where ctime is not available. On unix the ctime moves
+/// on such a reset, so the edit *is* detected; this test pins that.
+#[cfg(unix)]
+#[test]
+fn same_size_edit_with_restored_mtime_is_caught_by_ctime_on_unix() {
+    let ws = workspace(true);
+    let i = impact(&ws, &["mid"], &[]);
+    let db = tempfile::tempdir().unwrap();
+    let c = cache(&db);
+    age_all(&ws.root);
+    let k0 = key_of(&c, &ws, &i);
+    let lib = ws.root.join("crates/mid/src/lib.rs");
+    let mut bytes = std::fs::read(&lib).unwrap();
+    let last = bytes.len() - 1;
+    bytes[last] = bytes[last].wrapping_add(1);
+    std::fs::write(&lib, &bytes).unwrap();
+    set_mtime(&lib, 3600);
+    assert_ne!(k0, key_of(&c, &ws, &i));
+}
