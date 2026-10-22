@@ -8,6 +8,7 @@
 #![warn(missing_docs)]
 
 pub mod explain;
+pub mod fix;
 mod index;
 mod messages;
 mod test_out;
@@ -48,6 +49,9 @@ pub enum RunnerError {
     /// The workspace root is not a directory.
     #[error("workspace root `{0}` is not a directory")]
     InvalidRoot(PathBuf),
+    /// The requested operation is not available.
+    #[error("{0}")]
+    Unsupported(String),
 }
 
 impl From<RunnerError> for CoreError {
@@ -65,6 +69,10 @@ impl From<RunnerError> for CoreError {
                 path,
                 std::io::Error::new(std::io::ErrorKind::NotFound, "not a directory"),
             ),
+            RunnerError::Unsupported(message) => CoreError::Process {
+                command: "orq".to_string(),
+                message,
+            },
         }
     }
 }
@@ -140,6 +148,22 @@ impl Runner {
     pub fn with_cargo_bin(mut self, cargo: impl Into<OsString>) -> Self {
         self.cargo = Some(cargo.into());
         self
+    }
+
+    /// Compiles (but does not run) the tests of the crates in `impact`, so a
+    /// later Test step only has to execute them. Used by the daemon after a
+    /// change. Errors and diagnostics are ignored: the next real verify
+    /// reports them.
+    ///
+    /// Stub until PLAN.md T5.1 implements it: currently a no-op.
+    pub async fn prebuild_tests(
+        &self,
+        root: &Path,
+        impact: &ImpactSet,
+        build: &BuildOptions,
+    ) -> Result<(), RunnerError> {
+        let _ = (root, impact, build);
+        Ok(())
     }
 
     fn cargo_bin(&self) -> OsString {

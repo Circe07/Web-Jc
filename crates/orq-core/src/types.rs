@@ -38,6 +38,11 @@ pub struct ImpactSet {
     /// `Cargo.lock`, a `build.rs`, the toolchain, `.cargo/config*`...), in
     /// which case the whole workspace must be verified.
     pub full_rebuild: bool,
+    /// The changed files that were considered (relative to the root, not
+    /// ignored), so the runner can pick cargo targets (e.g. only build
+    /// benches when a bench changed).
+    #[serde(default)]
+    pub changed_files: Vec<PathBuf>,
 }
 
 impl ImpactSet {
@@ -218,6 +223,18 @@ pub struct VerifyResult {
     pub total_ms: u64,
 }
 
+/// Which cargo targets the compile and lint steps cover.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum Targets {
+    /// Library, binaries and tests always; benches and examples only when a
+    /// changed file lives under a crate's `benches/` or `examples/`.
+    #[default]
+    Auto,
+    /// `--all-targets`.
+    All,
+}
+
 /// Cargo feature and target selection, applied to every step of the ladder.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(default, deny_unknown_fields)]
@@ -230,6 +247,9 @@ pub struct BuildOptions {
     pub no_default_features: bool,
     /// `--target <triple>`.
     pub target: Option<String>,
+    /// Which cargo targets to compile and lint (not a cargo flag by itself:
+    /// the runner turns it into `--lib --bins --tests ...` or `--all-targets`).
+    pub targets: Targets,
 }
 
 impl BuildOptions {
@@ -378,6 +398,7 @@ mod tests {
                 changed: vec![krate("api")],
                 dependents: vec![krate("cli")],
                 full_rebuild: false,
+                changed_files: Vec::new(),
             },
             cache_hit: false,
             total_ms: 1812,
@@ -452,11 +473,18 @@ mod tests {
             changed: vec![krate("mid"), krate("base")],
             dependents: vec![krate("app"), krate("mid")],
             full_rebuild: false,
+            changed_files: Vec::new(),
         };
         let names: Vec<_> = impact.affected().into_iter().map(|c| c.name).collect();
         assert_eq!(names, ["app", "base", "mid"]);
         assert!(!impact.is_empty());
         assert!(ImpactSet::default().is_empty());
+    }
+
+    #[test]
+    fn targets_serialize_lowercase() {
+        assert_eq!(serde_json::to_string(&Targets::Auto).unwrap(), "\"auto\"");
+        assert_eq!(BuildOptions::default().targets, Targets::Auto);
     }
 
     #[test]
@@ -467,6 +495,7 @@ mod tests {
             all_features: false,
             no_default_features: true,
             target: Some("wasm32-unknown-unknown".into()),
+            targets: Targets::All,
         };
         assert_eq!(
             opts.cargo_args(),

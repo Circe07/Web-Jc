@@ -381,6 +381,15 @@ impl ResultCache for RedbCache {
         for arg in build.cargo_args() {
             field(&mut h, arg.as_bytes());
         }
+        field(&mut h, format!("{:?}", build.targets).as_bytes());
+        // With `Targets::Auto` the runner builds benches/examples only when
+        // one of them changed, so that choice is part of what was verified.
+        for file in &impact.changed_files {
+            let path = file.to_string_lossy();
+            if path.contains("benches/") || path.contains("examples/") {
+                field(&mut h, path.as_bytes());
+            }
+        }
         field(&mut h, rustc.as_bytes());
         for (k, v) in &env {
             field(&mut h, k.as_bytes());

@@ -124,6 +124,7 @@ async fn clean_multi_workspace_passes_every_step() {
             krate(&root, "crates/app", "app"),
         ],
         full_rebuild: false,
+        changed_files: Vec::new(),
     };
     let result = verify(&root, &impact, Step::Test).await;
 

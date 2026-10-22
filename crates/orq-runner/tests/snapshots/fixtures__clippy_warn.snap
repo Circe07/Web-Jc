@@ -135,7 +135,8 @@ expression: normalized
       }
     ],
     "dependents": [],
-    "full_rebuild": false
+    "full_rebuild": false,
+    "changed_files": []
   },
   "cache_hit": false,
   "total_ms": 0

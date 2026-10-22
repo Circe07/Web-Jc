@@ -58,6 +58,7 @@ fn impact(ws: &Ws, changed: &[&str], dependents: &[&str]) -> ImpactSet {
         changed: changed.iter().map(|n| krate(ws, n)).collect(),
         dependents: dependents.iter().map(|n| krate(ws, n)).collect(),
         full_rebuild: false,
+        changed_files: Vec::new(),
     }
 }
 

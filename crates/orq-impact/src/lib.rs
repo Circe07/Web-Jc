@@ -196,15 +196,22 @@ impl ImpactAnalyzer for CargoImpactAnalyzer {
 
         let mut full_rebuild = false;
         let mut changed = BTreeSet::new();
+        let mut changed_files = BTreeSet::new();
         for file in &changes.files {
             if self.config.is_ignored(file) {
                 continue;
             }
+            let mut relevant = false;
             if is_full_rebuild_trigger(file) {
                 full_rebuild = true;
+                relevant = true;
             }
             if let Some(i) = graph.owner(&canon_root.join(file)) {
                 changed.insert(i);
+                relevant = true;
+            }
+            if relevant {
+                changed_files.insert(file.clone());
             }
         }
         let dependents = graph.dependents(&changed);
@@ -217,6 +224,7 @@ impl ImpactAnalyzer for CargoImpactAnalyzer {
             changed: ids(&changed),
             dependents: ids(&dependents),
             full_rebuild,
+            changed_files: changed_files.into_iter().collect(),
         })
     }
 }
@@ -310,6 +318,21 @@ mod tests {
         );
         assert_eq!(names(&i.changed), ["base", "mid"]);
         assert_eq!(names(&i.dependents), ["app"]);
+    }
+
+    #[test]
+    fn changed_files_keep_only_relevant_paths() {
+        let i = analyze(
+            "multi",
+            &["docs/readme.md", "crates/leaf/benches/b.rs", "Cargo.lock"],
+        );
+        assert_eq!(
+            i.changed_files,
+            [
+                PathBuf::from("Cargo.lock"),
+                PathBuf::from("crates/leaf/benches/b.rs")
+            ]
+        );
     }
 
     #[test]

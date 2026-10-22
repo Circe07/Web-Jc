@@ -5,7 +5,10 @@
 //! logs go to stderr through `tracing` filtered by `ORQ_LOG` (default `warn`).
 
 mod daemon_cmd;
+mod doctor;
 mod explain;
+mod fix;
+mod hook;
 mod mcp;
 mod setup;
 mod stats;
@@ -41,6 +44,12 @@ enum Command {
     Setup(setup::SetupArgs),
     /// Summarize recorded verifications (`target/orq/stats.jsonl`).
     Stats(stats::StatsArgs),
+    /// Apply rustc/clippy machine-applicable fixes to the affected crates, then verify.
+    Fix(fix::FixArgs),
+    /// Claude Code hook entry point: reads the hook JSON on stdin.
+    Hook(hook::HookArgs),
+    /// Diagnose the orq installation and environment.
+    Doctor(doctor::DoctorArgs),
 }
 
 /// Arguments of `orq verify`.
@@ -137,6 +146,9 @@ fn main() -> ExitCode {
         Command::Mcp(args) => mcp::run(&args),
         Command::Setup(args) => setup::run(&args),
         Command::Stats(args) => stats::run(&args),
+        Command::Fix(args) => fix::run(&args),
+        Command::Hook(args) => hook::run(&args),
+        Command::Doctor(args) => doctor::run(&args),
     };
     match result {
         Ok(code) => ExitCode::from(code),

@@ -45,6 +45,7 @@ fn base(outcome: Outcome, diagnostics: Vec<Diagnostic>) -> VerifyResult {
             changed: vec![krate("api")],
             dependents: vec![],
             full_rebuild: false,
+            changed_files: Vec::new(),
         },
         cache_hit: false,
         total_ms: 1800,
