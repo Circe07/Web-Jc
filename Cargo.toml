@@ -7,7 +7,7 @@ exclude = ["fixtures"]
 version = "0.0.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/circe07/web-jc"
+repository = "https://github.com/circe07/orq"
 rust-version = "1.89"
 
 [workspace.dependencies]
