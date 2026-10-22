@@ -64,6 +64,18 @@ pub struct VerifyArgs {
     /// Workspace root (default: the workspace containing the current directory).
     #[arg(long)]
     pub root: Option<PathBuf>,
+    /// Cargo features to enable, comma separated (overrides `[build]` in orq.toml).
+    #[arg(long, value_delimiter = ',')]
+    pub features: Vec<String>,
+    /// Enable all cargo features.
+    #[arg(long)]
+    pub all_features: bool,
+    /// Disable default cargo features.
+    #[arg(long)]
+    pub no_default_features: bool,
+    /// Target triple to build for.
+    #[arg(long)]
+    pub target: Option<String>,
     /// Never delegate to a daemon (also `ORQ_NO_DAEMON=1`).
     #[arg(long, hide = true)]
     pub no_daemon: bool,

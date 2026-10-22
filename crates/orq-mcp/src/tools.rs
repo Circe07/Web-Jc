@@ -5,7 +5,8 @@ use std::sync::Arc;
 
 use orq_compress::LlmCompressor;
 use orq_core::{
-    stats, ChangeSet, Compressor, Config, CoreError, CrateId, ImpactAnalyzer, Step, VerifyRequest,
+    stats, BuildOptions, ChangeSet, Compressor, Config, CoreError, CrateId, ImpactAnalyzer, Step,
+    VerifyRequest,
 };
 use orq_daemon::client::{self, Mode};
 use orq_impact::CargoImpactAnalyzer;
@@ -28,6 +29,8 @@ struct VerifyArgs {
     files: Option<Vec<String>>,
     up_to: Option<Step>,
     budget: Option<usize>,
+    #[serde(flatten)]
+    build: BuildArgs,
 }
 
 #[derive(Deserialize, Default)]
@@ -35,6 +38,74 @@ struct VerifyArgs {
 struct TestArgs {
     files: Option<Vec<String>>,
     budget: Option<usize>,
+    #[serde(flatten)]
+    build: BuildArgs,
+}
+
+/// Optional cargo feature/target selection shared by `verify` and
+/// `run_affected_tests`.
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct BuildArgs {
+    features: Vec<String>,
+    all_features: bool,
+    no_default_features: bool,
+    target: Option<String>,
+}
+
+impl BuildArgs {
+    /// Layers the given arguments over `base`; `None` if none was given.
+    fn options(self, base: &BuildOptions) -> Option<BuildOptions> {
+        if self.features.is_empty()
+            && !self.all_features
+            && !self.no_default_features
+            && self.target.is_none()
+        {
+            return None;
+        }
+        let mut build = base.clone();
+        if !self.features.is_empty() {
+            build.features = self.features;
+        }
+        build.all_features |= self.all_features;
+        build.no_default_features |= self.no_default_features;
+        if self.target.is_some() {
+            build.target = self.target;
+        }
+        Some(build)
+    }
+}
+
+/// JSON schema properties of the build arguments.
+fn build_properties() -> Value {
+    json!({
+        "features": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Cargo features to enable (`--features`). Omit to use the orq.toml [build] default."
+        },
+        "all_features": {
+            "type": "boolean",
+            "description": "Enable all cargo features (`--all-features`)."
+        },
+        "no_default_features": {
+            "type": "boolean",
+            "description": "Disable default cargo features (`--no-default-features`)."
+        },
+        "target": {
+            "type": "string",
+            "description": "Target triple to build for (`--target`), e.g. wasm32-unknown-unknown."
+        }
+    })
+}
+
+/// Properties of a tool: `base` plus the build arguments.
+fn with_build(base: Value) -> Value {
+    let mut props = base;
+    if let (Value::Object(p), Value::Object(b)) = (&mut props, build_properties()) {
+        p.extend(b);
+    }
+    props
 }
 
 #[derive(Deserialize)]
@@ -79,10 +150,12 @@ pub(crate) fn definitions() -> Vec<Tool> {
          returns a report that is already compact (errors deduplicated and ranked, no noise). \
          Do not run cargo commands yourself. A failing build is a normal result (read the \
          report), not a tool failure. Use `up_to` to choose how far to go: `check` while \
-         iterating, `clippy` for lints, `test` (default) before you finish.",
+         iterating, `clippy` for lints, `test` (default) before you finish. Pass `features`, \
+         `all_features`, `no_default_features` or `target` to verify another feature set or \
+         target; otherwise the orq.toml [build] defaults apply.",
         schema(json!({
             "type": "object",
-            "properties": {
+            "properties": with_build(json!({
                 "files": files,
                 "up_to": {
                     "type": "string",
@@ -90,7 +163,7 @@ pub(crate) fn definitions() -> Vec<Tool> {
                     "description": "Last step to run. Default: from orq config (usually test)."
                 },
                 "budget": budget,
-            },
+            })),
             "additionalProperties": false
         })),
     );
@@ -100,10 +173,11 @@ pub(crate) fn definitions() -> Vec<Tool> {
         "Run the tests of the crates affected by your changes (and their dependents), after \
          fmt, check and clippy pass. Shortcut for `verify` with up_to=test. Use it instead of \
          `cargo test` / `cargo nextest` when you want to confirm behaviour before finishing. \
-         Returns a compact report.",
+         Accepts the same optional `features`, `all_features`, `no_default_features` and \
+         `target` arguments as `verify`. Returns a compact report.",
         schema(json!({
             "type": "object",
-            "properties": {"files": files, "budget": budget},
+            "properties": with_build(json!({"files": files, "budget": budget})),
             "additionalProperties": false
         })),
     );
@@ -147,11 +221,11 @@ pub(crate) async fn call(
     let args = Value::Object(arguments.unwrap_or_default());
     let result = match name {
         "verify" => match parse::<VerifyArgs>(args) {
-            Ok(a) => verify(state, a.files, a.up_to, a.budget).await,
+            Ok(a) => verify(state, a.files, a.up_to, a.budget, a.build).await,
             Err(e) => Err(e),
         },
         "run_affected_tests" => match parse::<TestArgs>(args) {
-            Ok(a) => verify(state, a.files, Some(Step::Test), a.budget).await,
+            Ok(a) => verify(state, a.files, Some(Step::Test), a.budget, a.build).await,
             Err(e) => Err(e),
         },
         "explain_error" => match parse::<ExplainArgs>(args) {
@@ -208,6 +282,7 @@ async fn verify(
     files: Option<Vec<String>>,
     up_to: Option<Step>,
     budget: Option<usize>,
+    build: BuildArgs,
 ) -> Result<CallToolResult, String> {
     let budget = budget.unwrap_or(state.config.budget);
     let up_to = up_to.unwrap_or(state.config.up_to);
@@ -219,7 +294,7 @@ async fn verify(
         up_to,
         token_budget: budget,
         use_cache: true,
-        build: None,
+        build: build.options(&state.config.build),
     };
     let mode = if no_daemon() {
         Mode::InProcess

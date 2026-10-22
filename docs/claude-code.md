@@ -26,21 +26,25 @@ claude mcp add orq -- orq mcp --root /path/to/workspace
 Without `--root`, orq serves the Cargo workspace that contains the directory
 Claude Code was started in. Check it with `claude mcp list`.
 
-Optional: run `orq daemon start` in the workspace. The server then delegates
-to the warm daemon automatically; otherwise it verifies in-process (set
-`ORQ_NO_DAEMON=1` to forbid the daemon).
+The daemon starts automatically: when `orq mcp` starts and no daemon is
+running for the workspace, it launches one in the background (unix only; it
+never delays or fails the server). The server then delegates to the warm
+daemon; otherwise it verifies in-process. To disable the autostart set
+`autostart_daemon = false` in `orq.toml` or export `ORQ_NO_DAEMON=1` (which
+also forbids using a daemon at all). You can still run `orq daemon start` and
+`orq daemon stop` by hand.
 
 ## Tools
 
 | Tool | Arguments | What it does |
 | --- | --- | --- |
-| `verify` | `files?: string[]`, `up_to?: "check" \| "clippy" \| "test"`, `budget?: number` | Verifies the crates affected by the changes (fmt, check, clippy, tests; stops at the first failing step). Returns a compact text report plus the same data as structured JSON. A failing build is a normal result, not a tool error. |
-| `run_affected_tests` | `files?: string[]`, `budget?: number` | Shortcut for `verify` with `up_to = "test"`. |
+| `verify` | `files?: string[]`, `up_to?: "check" \| "clippy" \| "test"`, `budget?: number`, `features?: string[]`, `all_features?: bool`, `no_default_features?: bool`, `target?: string` | Verifies the crates affected by the changes (fmt, check, clippy, tests; stops at the first failing step). Returns a compact text report plus the same data as structured JSON. A failing build is a normal result, not a tool error. |
+| `run_affected_tests` | `files?: string[]`, `budget?: number`, plus the same build arguments as `verify` | Shortcut for `verify` with `up_to = "test"`. |
 | `explain_error` | `code: string` | Short explanation and typical fix for a rustc error code such as `E0308`. |
 | `impact` | `files?: string[]` | Returns `{changed, dependents, full_rebuild}` (crate names) without building anything. Useful to plan. |
 
 `files` are relative to the workspace root. When omitted, orq detects the
-changes with `git`. `budget` defaults to the `budget` in `orq.toml`. Every
+changes with `git`. `budget` defaults to the `budget` in `orq.toml`. The build arguments override the `[build]` section of `orq.toml` (same as `orq verify --features a,b --all-features --no-default-features --target <triple>`). Every
 `verify` is recorded in `<target>/orq/stats.jsonl` with `source = "mcp"`
 (see `orq stats`).
 

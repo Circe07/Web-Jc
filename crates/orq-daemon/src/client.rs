@@ -3,10 +3,12 @@
 
 use std::fs::{File, OpenOptions};
 use std::path::Path;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use orq_cache::RedbCache;
 use orq_compress::LlmCompressor;
-use orq_core::ipc::{self, DaemonRequest, DaemonResponse};
+use orq_core::ipc::{self, DaemonRequest, DaemonResponse, DaemonStatus};
 use orq_core::{root, Config, CoreError, Pipeline, VerifyRequest, VerifyResult};
 use orq_impact::CargoImpactAnalyzer;
 use orq_runner::Runner;
@@ -109,4 +111,52 @@ fn acquire_lock(root: &Path) -> Result<File, CoreError> {
         .map_err(|e| CoreError::io(&path, e))?;
     file.lock().map_err(|e| CoreError::io(&path, e))?;
     Ok(file)
+}
+
+/// Asks the daemon of `root` for its status; `None` if none answers.
+pub fn daemon_status(root: &Path) -> Option<DaemonStatus> {
+    match ipc::request(root, &DaemonRequest::Status) {
+        Ok(Some(DaemonResponse::Status(status))) => Some(status),
+        _ => None,
+    }
+}
+
+/// Spawns `orq daemon run --root <root>` (this executable) detached with null
+/// stdio, then polls its status for up to 5 s.
+///
+/// Meant to be called from the `orq` binary. Blocking; call it from a
+/// blocking context. Returns as soon as the daemon answers.
+pub fn spawn_daemon(root: &Path) -> Result<(), CoreError> {
+    let exe = std::env::current_exe().map_err(|e| CoreError::Process {
+        command: "daemon".into(),
+        message: format!("locating the orq executable: {e}"),
+    })?;
+    let mut command = Command::new(exe);
+    command
+        .args(["daemon", "run", "--root"])
+        .arg(root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // Own process group: Ctrl-C in the parent terminal must not kill it.
+        command.process_group(0);
+    }
+    command.spawn().map_err(|e| CoreError::Process {
+        command: "daemon".into(),
+        message: format!("spawning the daemon: {e}"),
+    })?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(100));
+        if daemon_status(root).is_some() {
+            return Ok(());
+        }
+    }
+    Err(CoreError::Process {
+        command: "daemon".into(),
+        message: "daemon did not answer within 5 s".into(),
+    })
 }

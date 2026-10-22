@@ -2,7 +2,9 @@
 
 use anyhow::{Context, Result};
 use orq_compress::LlmCompressor;
-use orq_core::{root, stats, ChangeSet, Compressor, Config, CrateId, VerifyRequest, VerifyResult};
+use orq_core::{
+    root, stats, BuildOptions, ChangeSet, Compressor, Config, CrateId, VerifyRequest, VerifyResult,
+};
 use orq_daemon::client::{self, Mode};
 use serde_json::{json, Value};
 
@@ -25,7 +27,7 @@ pub fn run(args: &VerifyArgs) -> Result<u8> {
         up_to: args.up_to.unwrap_or(config.up_to),
         token_budget: budget,
         use_cache: !args.no_cache,
-        build: None,
+        build: build_options(args, &config),
     };
 
     let no_daemon = args.no_daemon || std::env::var_os("ORQ_NO_DAEMON").is_some_and(|v| v == "1");
@@ -49,7 +51,11 @@ pub fn run(args: &VerifyArgs) -> Result<u8> {
     }
 
     let output = if args.json {
-        let json = enrich(report.json, &result);
+        let effective = request
+            .build
+            .clone()
+            .unwrap_or_else(|| config.build.clone());
+        let json = enrich(report.json, &result, &effective);
         serde_json::to_string_pretty(&json).context("serializing report")?
     } else {
         report.text
@@ -58,8 +64,9 @@ pub fn run(args: &VerifyArgs) -> Result<u8> {
     Ok(if result.outcome.is_pass() { 0 } else { 1 })
 }
 
-/// Adds top-level `impact` (crate names) and `cache_hit` when missing.
-fn enrich(mut json: Value, result: &VerifyResult) -> Value {
+/// Adds top-level `impact` (crate names), `cache_hit` and the effective
+/// `build` options when missing.
+fn enrich(mut json: Value, result: &VerifyResult, build: &BuildOptions) -> Value {
     let names =
         |crates: &[CrateId]| -> Vec<String> { crates.iter().map(|c| c.name.clone()).collect() };
     if let Value::Object(map) = &mut json {
@@ -71,6 +78,66 @@ fn enrich(mut json: Value, result: &VerifyResult) -> Value {
             })
         });
         map.entry("cache_hit").or_insert(json!(result.cache_hit));
+        map.entry("build").or_insert_with(|| json!(build));
     }
     json
+}
+
+/// Build options requested on the command line, layered over `config.build`;
+/// `None` when no build flag was given (the pipeline default applies).
+fn build_options(args: &VerifyArgs, config: &Config) -> Option<BuildOptions> {
+    if args.features.is_empty()
+        && !args.all_features
+        && !args.no_default_features
+        && args.target.is_none()
+    {
+        return None;
+    }
+    let mut build = config.build.clone();
+    if !args.features.is_empty() {
+        build.features = args.features.clone();
+    }
+    build.all_features |= args.all_features;
+    build.no_default_features |= args.no_default_features;
+    if args.target.is_some() {
+        build.target = args.target.clone();
+    }
+    Some(build)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(extra: &[&str]) -> VerifyArgs {
+        use clap::Parser;
+        #[derive(Parser)]
+        struct W {
+            #[command(flatten)]
+            v: VerifyArgs,
+        }
+        let argv = std::iter::once("orq").chain(extra.iter().copied());
+        W::parse_from(argv).v
+    }
+
+    #[test]
+    fn no_flags_means_default() {
+        assert_eq!(build_options(&args(&[]), &Config::default()), None);
+    }
+
+    #[test]
+    fn flags_override_config() {
+        let mut config = Config::default();
+        config.build.features = vec!["old".into()];
+        config.build.target = Some("t1".into());
+        let a = args(&["--features", "a,b", "--no-default-features"]);
+        let b = build_options(&a, &config).unwrap();
+        assert_eq!(b.features, ["a", "b"]);
+        assert!(b.no_default_features && !b.all_features);
+        assert_eq!(b.target.as_deref(), Some("t1"));
+        let b = build_options(&args(&["--target", "t2", "--all-features"]), &config).unwrap();
+        assert_eq!(b.features, ["old"]);
+        assert!(b.all_features);
+        assert_eq!(b.target.as_deref(), Some("t2"));
+    }
 }
