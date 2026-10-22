@@ -65,4 +65,43 @@ Notes for wave 2:
   (850073f); each agent had to move to 8ed4fea by hand. Wave 2 briefs must
   say this explicitly.
 
-Pending: wave 2 (T2.1 `orq-cli verify`, T2.2 `orq-daemon`, T2.3 integration and `v0.1.0`).
+
+## Wave 2 — Phase 1 integration + daemon · closed 2026-10-22 · `v0.1.0`
+
+Before launching the agents, the lead added these contracts to `orq-core`:
+- `Pipeline`: the impact → cache → runner flow, shared by the CLI and the
+  daemon. A cache failure never fails a verify.
+- `StepRunner` and `ImpactAnalyzer::detect_changes`.
+- `orq_core::ipc`: the JSON-lines protocol, `socket_path` and a blocking client.
+- `Diagnostic.label`: the runner fills it and the compressor prints it after
+  the caret.
+- MSRV raised to 1.89, for `File::lock`.
+- A stub for `orq_daemon::serve`.
+
+| Task | Result | Tests |
+| --- | --- | --- |
+| T2.1 `orq-cli` | `orq verify` (`--files/--up-to/--budget/--no-cache/--json`, exit 0/1/2), `orq explain`, `orq daemon start\|stop\|status\|run`, lock on `target/orq/lock` | 7 integration + 5 unit |
+| T2.2 `orq-daemon` | Unix socket, watcher (debounce 300 ms), metadata invalidation, `cargo check` warm-up, one cargo at a time, 30 min idle shutdown | 4 |
+| T2.3 integration (lead) | merge, root detection without spawning cargo, e2e, `v0.1.0` | — |
+
+Measurements on `fixtures/multi` (debug build):
+
+| Case | Time |
+| --- | --- |
+| `orq verify` in-process, repeated (cache) | ~130 ms, measured from process start; was ~190 ms before removing `cargo locate-project` |
+| `orq verify` through the daemon, repeated (cache) | **13 ms** |
+| `orq verify` through the daemon after a change (warm) | 0.9 s |
+
+The CI test for the < 200 ms target passes on Linux and macOS.
+
+End-to-end daemon run: `start` → `status` (`warming=true` after the edit) →
+`verify` PASS on leaf → cached `verify` (13 ms) → error in `base` gives
+`FAIL check` on app, base, leaf and mid with the E0308 label → `stop` →
+`status` reports "not running".
+
+Pending:
+- Windows: the daemon is Unix-only for now, and the CLI falls back to
+  in-process mode.
+- `rustc -Vv` still costs ~70 ms of every in-process run. It could be memoized
+  on disk with a toolchain fingerprint if needed.
+- Next: wave 3 (T3.1 MCP, T3.2 `orq setup`, T3.3 stats/benchmarks), then T3.4.
