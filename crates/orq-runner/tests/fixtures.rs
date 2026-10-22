@@ -4,6 +4,8 @@
 
 use std::path::{Path, PathBuf};
 
+mod common;
+
 use orq_core::{Config, CrateId, ImpactSet, Outcome, Severity, Step, VerifyResult};
 use orq_runner::Runner;
 
@@ -90,7 +92,11 @@ async fn broken_type_reports_e0308_with_location() {
 
 #[tokio::test]
 async fn failing_test_is_reported_by_name() {
-    let root = fixture("failing-test");
+    // A copy: the failing tests are remembered in the target directory, which
+    // would turn a second run of this test into a fail-fast run.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().to_path_buf();
+    common::copy_fixture("failing-test", &root);
     let result = verify(&root, &single(&root, "failing-test"), Step::Test).await;
 
     assert_eq!(
