@@ -1,0 +1,67 @@
+---
+source: crates/orq-runner/tests/fixtures.rs
+expression: result
+---
+{
+  "outcome": {
+    "status": "fail",
+    "failed_step": "check"
+  },
+  "steps": [
+    {
+      "step": "fmt",
+      "duration_ms": 0,
+      "passed": true
+    },
+    {
+      "step": "check",
+      "duration_ms": 0,
+      "passed": false
+    }
+  ],
+  "diagnostics": [
+    {
+      "severity": "error",
+      "code": "E0308",
+      "message": "mismatched types",
+      "file": "src/lib.rs",
+      "line": 6,
+      "column": 19,
+      "snippet": "    let id: u64 = req.id.clone();",
+      "suggestion": null,
+      "crate_id": {
+        "name": "broken-type",
+        "manifest_path": "[manifest]"
+      },
+      "step": "check"
+    },
+    {
+      "severity": "error",
+      "code": "E0308",
+      "message": "mismatched types",
+      "file": "src/lib.rs",
+      "line": 6,
+      "column": 19,
+      "snippet": "    let id: u64 = req.id.clone();",
+      "suggestion": null,
+      "crate_id": {
+        "name": "broken-type",
+        "manifest_path": "[manifest]"
+      },
+      "step": "check"
+    }
+  ],
+  "test_failures": [],
+  "impact": {
+    "changed": [
+      {
+        "name": "broken-type",
+        "manifest_path": "[manifest]"
+      }
+    ],
+    "dependents": [],
+    "full_rebuild": false
+  },
+  "cache_hit": false,
+  "total_ms": 0
+}
