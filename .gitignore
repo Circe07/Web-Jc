@@ -4,3 +4,4 @@ fixtures/*/Cargo.lock
 !fixtures/multi/Cargo.lock
 *.snap.new
 .DS_Store
+/.claude/worktrees/
