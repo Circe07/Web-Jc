@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use orq_core::CoreError;
 
+pub mod client;
 #[cfg(unix)]
 mod server;
 

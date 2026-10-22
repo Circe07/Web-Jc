@@ -1,9 +1,9 @@
-//! Workspace root discovery and path helpers.
+//! Workspace root discovery and path helpers (shared by the CLI and MCP).
 
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{bail, Context, Result};
+use crate::CoreError;
 
 /// Resolves the workspace root: `explicit` if given, else the workspace
 /// containing the current directory.
@@ -12,15 +12,13 @@ use anyhow::{bail, Context, Result};
 /// common layouts; `cargo locate-project` is only used when the nearest
 /// workspace manifest `exclude`s the current package, or when no manifest
 /// is found at all.
-pub fn resolve(explicit: Option<&Path>) -> Result<PathBuf> {
+pub fn resolve(explicit: Option<&Path>) -> Result<PathBuf, CoreError> {
     if let Some(dir) = explicit {
-        return dir
-            .canonicalize()
-            .with_context(|| format!("invalid --root {}", dir.display()));
+        return dir.canonicalize().map_err(|e| CoreError::io(dir, e));
     }
     let cwd = std::env::current_dir()
         .and_then(|d| d.canonicalize())
-        .context("cannot read the current directory")?;
+        .map_err(|e| CoreError::io(".", e))?;
     match find_workspace(&cwd) {
         Some(root) => Ok(root),
         None => locate_with_cargo(),
@@ -57,23 +55,27 @@ fn find_workspace(start: &Path) -> Option<PathBuf> {
     nearest_package
 }
 
-fn locate_with_cargo() -> Result<PathBuf> {
+fn locate_with_cargo() -> Result<PathBuf, CoreError> {
+    const COMMAND: &str = "cargo locate-project --workspace --message-format plain";
     let output = Command::new("cargo")
         .args(["locate-project", "--workspace", "--message-format", "plain"])
         .output()
-        .context("failed to run `cargo locate-project`")?;
+        .map_err(|e| CoreError::Process {
+            command: COMMAND.into(),
+            message: e.to_string(),
+        })?;
     if !output.status.success() {
-        bail!(
-            "not inside a cargo workspace: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
+        return Err(CoreError::Process {
+            command: COMMAND.into(),
+            message: format!(
+                "not inside a cargo workspace: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        });
     }
     let manifest = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
-    let dir = manifest
-        .parent()
-        .context("cargo returned a manifest path without a parent")?;
-    dir.canonicalize()
-        .with_context(|| format!("invalid workspace root {}", dir.display()))
+    let dir = manifest.parent().unwrap_or(Path::new("."));
+    dir.canonicalize().map_err(|e| CoreError::io(dir, e))
 }
 
 /// Converts a path given relative to the current directory into one relative

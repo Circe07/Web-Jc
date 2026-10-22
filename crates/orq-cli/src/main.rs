@@ -1,11 +1,14 @@
-//! `orq` binary: verify, explain and daemon management commands.
+//! `orq` binary: verify, explain, daemon management, MCP server, setup and
+//! stats commands.
 //!
 //! Stdout carries only the command output (report, explanation, status);
 //! logs go to stderr through `tracing` filtered by `ORQ_LOG` (default `warn`).
 
 mod daemon_cmd;
 mod explain;
-mod root;
+mod mcp;
+mod setup;
+mod stats;
 mod verify;
 
 use std::path::PathBuf;
@@ -32,6 +35,12 @@ enum Command {
         #[command(subcommand)]
         action: DaemonCommand,
     },
+    /// Run the MCP server on stdio (for Claude Code: `claude mcp add orq -- orq mcp`).
+    Mcp(mcp::McpArgs),
+    /// Detect fast build tools and propose (or `--apply`) a dev profile.
+    Setup(setup::SetupArgs),
+    /// Summarize recorded verifications (`target/orq/stats.jsonl`).
+    Stats(stats::StatsArgs),
 }
 
 /// Arguments of `orq verify`.
@@ -52,7 +61,7 @@ pub struct VerifyArgs {
     /// Print the JSON report instead of text.
     #[arg(long)]
     pub json: bool,
-    /// Workspace root (default: found with `cargo locate-project`).
+    /// Workspace root (default: the workspace containing the current directory).
     #[arg(long)]
     pub root: Option<PathBuf>,
     /// Never delegate to a daemon (also `ORQ_NO_DAEMON=1`).
@@ -113,6 +122,9 @@ fn main() -> ExitCode {
         Command::Verify(args) => verify::run(&args),
         Command::Explain(args) => explain::run(&args),
         Command::Daemon { action } => daemon_cmd::run(action),
+        Command::Mcp(args) => mcp::run(&args),
+        Command::Setup(args) => setup::run(&args),
+        Command::Stats(args) => stats::run(&args),
     };
     match result {
         Ok(code) => ExitCode::from(code),

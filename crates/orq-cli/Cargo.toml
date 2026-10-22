@@ -17,6 +17,7 @@ orq-runner.workspace = true
 orq-compress.workspace = true
 orq-cache.workspace = true
 orq-daemon.workspace = true
+orq-mcp.workspace = true
 tokio.workspace = true
 clap.workspace = true
 anyhow.workspace = true

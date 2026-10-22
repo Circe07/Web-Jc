@@ -7,7 +7,9 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Context, Result};
 use orq_core::ipc::{self, DaemonRequest, DaemonResponse, DaemonStatus};
 
-use crate::{root, DaemonCommand};
+use orq_core::root;
+
+use crate::DaemonCommand;
 
 /// Dispatches a daemon subcommand and returns the exit code.
 pub fn run(action: DaemonCommand) -> Result<u8> {

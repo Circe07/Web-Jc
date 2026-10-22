@@ -7,6 +7,7 @@
 
 #![warn(missing_docs)]
 
+pub mod explain;
 mod index;
 mod messages;
 mod test_out;

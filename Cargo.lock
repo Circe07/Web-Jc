@@ -571,6 +571,7 @@ dependencies = [
  "orq-core",
  "orq-daemon",
  "orq-impact",
+ "orq-mcp",
  "orq-runner",
  "predicates",
  "serde_json",
@@ -595,6 +596,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
  "toml",
  "tracing",

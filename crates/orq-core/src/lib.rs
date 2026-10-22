@@ -10,6 +10,8 @@ mod config;
 mod error;
 pub mod ipc;
 mod pipeline;
+pub mod root;
+pub mod stats;
 mod types;
 
 pub use config::{Config, Lang, NextestMode, CONFIG_FILE_NAME};

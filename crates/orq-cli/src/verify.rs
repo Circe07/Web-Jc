@@ -1,20 +1,12 @@
 //! `orq verify`: impact, cache, runner, compressor; or delegation to a daemon.
 
-use std::fs::OpenOptions;
-use std::path::Path;
-
 use anyhow::{Context, Result};
-use orq_cache::RedbCache;
 use orq_compress::LlmCompressor;
-use orq_core::ipc::{self, DaemonRequest, DaemonResponse};
-use orq_core::{
-    ChangeSet, CompactReport, Compressor, Config, CrateId, Pipeline, VerifyRequest, VerifyResult,
-};
-use orq_impact::CargoImpactAnalyzer;
-use orq_runner::Runner;
+use orq_core::{root, stats, ChangeSet, Compressor, Config, CrateId, VerifyRequest, VerifyResult};
+use orq_daemon::client::{self, Mode};
 use serde_json::{json, Value};
 
-use crate::{root, VerifyArgs};
+use crate::VerifyArgs;
 
 /// Runs `orq verify` and returns the process exit code (0 pass, 1 fail).
 pub fn run(args: &VerifyArgs) -> Result<u8> {
@@ -36,18 +28,24 @@ pub fn run(args: &VerifyArgs) -> Result<u8> {
     };
 
     let no_daemon = args.no_daemon || std::env::var_os("ORQ_NO_DAEMON").is_some_and(|v| v == "1");
-    let delegated = if no_daemon {
-        None
+    let mode = if no_daemon {
+        Mode::InProcess
     } else {
-        delegate(&root, &request)
+        Mode::Auto
     };
-    let (result, report) = match delegated {
-        Some(result) => {
-            let report = LlmCompressor::new(config.lang).compress(&result, budget);
-            (result, report)
-        }
-        None => in_process(&root, config, &request, budget)?,
-    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("building tokio runtime")?;
+    let verified = runtime.block_on(client::verify(&request, &config, mode))?;
+    let result = verified.result;
+    let report = LlmCompressor::new(config.lang).compress(&result, budget);
+
+    let record =
+        stats::StatsRecord::new(&result, &report, request.up_to, verified.via_daemon, "cli");
+    if let Err(e) = stats::append(&root, &record) {
+        tracing::warn!("could not record stats: {e}");
+    }
 
     let output = if args.json {
         let json = enrich(report.json, &result);
@@ -57,66 +55,6 @@ pub fn run(args: &VerifyArgs) -> Result<u8> {
     };
     println!("{}", output.trim_end());
     Ok(if result.outcome.is_pass() { 0 } else { 1 })
-}
-
-fn delegate(root: &Path, request: &VerifyRequest) -> Option<VerifyResult> {
-    match ipc::request(root, &DaemonRequest::Verify(request.clone())) {
-        Ok(Some(DaemonResponse::Verify(result))) => Some(result),
-        Ok(None) => None,
-        Ok(Some(DaemonResponse::Error { message })) => {
-            eprintln!("orq: daemon error: {message}; running in-process");
-            None
-        }
-        Ok(Some(other)) => {
-            eprintln!("orq: unexpected daemon response {other:?}; running in-process");
-            None
-        }
-        Err(e) => {
-            eprintln!("orq: daemon unavailable ({e}); running in-process");
-            None
-        }
-    }
-}
-
-fn in_process(
-    root: &Path,
-    config: Config,
-    request: &VerifyRequest,
-    budget: usize,
-) -> Result<(VerifyResult, CompactReport)> {
-    let _lock = acquire_lock(root)?;
-    let pipeline = Pipeline {
-        analyzer: CargoImpactAnalyzer::new(config.clone()),
-        runner: Runner::new(config.clone()),
-        cache: RedbCache::open(root)
-            .map_err(|e| tracing::warn!("cache disabled: {e}"))
-            .ok(),
-        compressor: LlmCompressor::new(config.lang),
-    };
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("building tokio runtime")?;
-    let result = runtime.block_on(pipeline.verify(request))?;
-    let report = pipeline.report(&result, budget);
-    Ok((result, report))
-}
-
-/// Takes the exclusive per-workspace lock `target/orq/lock` (PLAN.md 7.2).
-/// The lock is released when the returned file is dropped.
-fn acquire_lock(root: &Path) -> Result<std::fs::File> {
-    let dir = root::target_dir(root).join("orq");
-    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-    let path = dir.join("lock");
-    let file = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(&path)
-        .with_context(|| format!("opening {}", path.display()))?;
-    file.lock()
-        .with_context(|| format!("locking {}", path.display()))?;
-    Ok(file)
 }
 
 /// Adds top-level `impact` (crate names) and `cache_hit` when missing.
