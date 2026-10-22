@@ -17,7 +17,9 @@ fn copy_dir(from: &Path, to: &Path) {
         if entry.file_type().unwrap().is_dir() {
             copy_dir(&entry.path(), &dest);
         } else {
-            std::fs::copy(entry.path(), dest).unwrap();
+            // Not `fs::copy`: on macOS it preserves the source mtime, and the
+            // index tests rely on fresh copies being "just written".
+            std::fs::write(dest, std::fs::read(entry.path()).unwrap()).unwrap();
         }
     }
 }
