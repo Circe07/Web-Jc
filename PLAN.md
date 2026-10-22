@@ -330,6 +330,35 @@ Base preparada por el líder (`5e6cb9b`):
 
 Fuera de esta oleada: selección fina de tests, medición de la calidad de la compresión con tareas reales, named pipes en Windows.
 
+### Oleada 5 — Velocidad en frío, integración con Claude Code y robustez (5 subagentes en paralelo)
+
+Base preparada por el líder (`4aabdb2`):
+- `ImpactSet.changed_files` y `BuildOptions.targets` (`auto` | `all`), ya incluidos en la clave de caché.
+- Stubs de `Runner::prebuild_tests` y `orq_runner::fix`.
+- Subcomandos `orq fix`, `orq hook` y `orq doctor`, cada uno en su fichero.
+
+**T5.1 Runner** (`orq-runner`, salvo `fix.rs`):
+- `targets = auto`: compila lib, bins y tests siempre; benches y examples solo si cambió alguno de sus ficheros.
+- Ejecuta primero los tests que fallaron la última vez.
+- Implementa `prebuild_tests`.
+
+**T5.2 Daemon** (`orq-daemon`, `server.rs`):
+- El precalentamiento usa el mismo peldaño que una verificación normal (clippy, no check), para que los artefactos sirvan.
+- Después precompila los tests con `prebuild_tests`.
+
+**T5.3 `orq fix` / `apply_fix`** (`orq-runner/src/fix.rs`, `orq-cli/src/fix.rs`, herramienta MCP): aplica las sugerencias `MachineApplicable` de rustc y clippy a los crates afectados y vuelve a verificar.
+
+**T5.4 Hook y plugin de Claude Code** (`orq-cli/src/hook.rs`, `integrations/claude-code/`, `docs/claude-code.md`):
+- `orq hook` para `PostToolUse` sobre Edit/Write/MultiEdit: verifica y devuelve el fallo al agente.
+- Plugin con el hook y el servidor MCP.
+
+**T5.5 Robustez** (`.github/workflows/realworld.yml`, `benches/realworld.sh`, `orq-cli/src/doctor.rs`, `orq-cli/src/stats.rs`):
+- CI nocturno sobre proyectos reales.
+- `orq doctor`.
+- Estimación de ahorro en `orq stats`.
+
+Fuera de esta oleada: medir la calidad de la compresión con tareas reales (Oleada 6), named pipes en Windows.
+
 ---
 
 ## 6. Fixtures (`fixtures/`)
