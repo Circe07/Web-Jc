@@ -73,6 +73,7 @@ impl From<RunnerError> for CoreError {
 #[derive(Debug, Clone)]
 pub struct Runner {
     config: Config,
+    cargo: Option<OsString>,
 }
 
 /// Raw output of one process.
@@ -98,32 +99,91 @@ impl StepRunner for Runner {
         root: &Path,
         impact: &ImpactSet,
         up_to: Step,
-        _build: &BuildOptions,
+        build: &BuildOptions,
     ) -> Result<VerifyResult, CoreError> {
-        // TODO(T4.2): pass `build.cargo_args()` to every cargo invocation.
-        self.verify(root, impact, up_to)
+        self.verify_with(root, impact, up_to, build)
             .await
             .map_err(CoreError::from)
     }
 }
 
 impl Runner {
-    /// Creates a runner using `config` (notably [`Config::nextest`]).
-    pub fn new(config: Config) -> Self {
-        Self { config }
+    async fn run_cargo(
+        &self,
+        root: &Path,
+        args: &[String],
+        extra_env: &[(&str, &str)],
+    ) -> Result<Captured, RunnerError> {
+        run_cargo_with(self.cargo_bin(), root, args, extra_env).await
     }
 
-    /// Runs the ladder up to and including `up_to` on the crates of `impact`.
+    /// `true` if `cargo nextest` is available.
+    async fn nextest_installed(&self, root: &Path) -> bool {
+        matches!(
+            self.run_cargo(root, &["nextest".into(), "--version".into()], &[]).await,
+            Ok(out) if out.success
+        )
+    }
+
+    /// Creates a runner using `config` (notably [`Config::nextest`]).
+    pub fn new(config: Config) -> Self {
+        Self {
+            config,
+            cargo: None,
+        }
+    }
+
+    /// Uses `cargo` as the cargo executable instead of `$CARGO` / `cargo`.
     ///
-    /// Steps run in order and the ladder stops at the first step with errors
-    /// (warnings do not stop it). The result has `cache_hit = false` and
-    /// `impact = impact.clone()`. If `impact.is_empty()` nothing is run and
-    /// the result is a pass with no steps.
+    /// Mostly useful to wrap cargo (for instance to count invocations).
+    #[must_use]
+    pub fn with_cargo_bin(mut self, cargo: impl Into<OsString>) -> Self {
+        self.cargo = Some(cargo.into());
+        self
+    }
+
+    fn cargo_bin(&self) -> OsString {
+        self.cargo.clone().unwrap_or_else(cargo_bin)
+    }
+
+    /// Runs the ladder up to and including `up_to` on the crates of `impact`
+    /// with the default [`BuildOptions`].
+    ///
+    /// See [`Runner::verify_with`].
     pub async fn verify(
         &self,
         root: &Path,
         impact: &ImpactSet,
         up_to: Step,
+    ) -> Result<VerifyResult, RunnerError> {
+        self.verify_with(root, impact, up_to, &BuildOptions::default())
+            .await
+    }
+
+    /// Runs the ladder up to and including `up_to` on the crates of `impact`.
+    ///
+    /// `build.cargo_args()` is appended to every cargo invocation except
+    /// `cargo fmt`.
+    ///
+    /// Steps run in order and the ladder stops at the first step with errors
+    /// (warnings do not stop it). The result has `cache_hit = false` and
+    /// `impact = impact.clone()`. If `impact.is_empty()` nothing is run and
+    /// the result is a pass with no steps.
+    ///
+    /// Performance: `cargo fmt --check` runs concurrently with the first
+    /// compile, and when the ladder reaches `Clippy` a single
+    /// `cargo clippy` run provides both the `Check` and the `Clippy` steps
+    /// (clippy already runs a full `cargo check` underneath). Diagnostics
+    /// whose code starts with `clippy::` belong to `Clippy`, everything else
+    /// to `Check`. The shared run's wall time is reported as the duration of
+    /// `Check`; `Clippy` reports 0 ms because it costs nothing extra. If
+    /// `Check` fails, `Clippy` is not reported (it never really ran).
+    pub async fn verify_with(
+        &self,
+        root: &Path,
+        impact: &ImpactSet,
+        up_to: Step,
+        build: &BuildOptions,
     ) -> Result<VerifyResult, RunnerError> {
         let started = Instant::now();
         let mut result = VerifyResult {
@@ -143,27 +203,114 @@ impl Runner {
         }
 
         let index = CrateIndex::new(root, impact.affected());
-        for step in up_to.ladder() {
+        let build_args = build.cargo_args();
+
+        // Fmt, concurrently with the first compile when there is one.
+        let fmt_started = Instant::now();
+        let (fmt, compile) = if up_to == Step::Fmt {
+            (self.run_fmt(root, impact, &index).await, None)
+        } else {
+            let (fmt, compile) = tokio::join!(
+                self.run_fmt(root, impact, &index),
+                self.run_compile_ladder(up_to, root, impact, &index, &build_args)
+            );
+            (fmt, Some(compile))
+        };
+        let fmt_ms = millis(fmt_started.elapsed());
+        let fmt = fmt?;
+        result.steps.push(StepReport {
+            step: Step::Fmt,
+            duration_ms: fmt_ms,
+            passed: fmt.passed,
+        });
+        let mut failed = (!fmt.passed).then_some(Step::Fmt);
+        result.diagnostics.extend(fmt.diagnostics);
+
+        if let Some(compile) = compile {
+            let (reports, diagnostics, compile_failed) = compile?;
+            result.steps.extend(reports);
+            result.diagnostics.extend(diagnostics);
+            // A rustfmt crash wins; the compile results are kept anyway.
+            failed = failed.or(compile_failed);
+        }
+
+        if failed.is_none() && up_to == Step::Test {
             let step_started = Instant::now();
-            let output = match step {
-                Step::Fmt => self.run_fmt(root, impact, &index).await?,
-                Step::Check | Step::Clippy => self.run_compiler(step, root, impact, &index).await?,
-                Step::Test => self.run_tests(root, impact, &index).await?,
-            };
+            let output = self.run_tests(root, impact, &index, &build_args).await?;
             result.steps.push(StepReport {
-                step,
+                step: Step::Test,
                 duration_ms: millis(step_started.elapsed()),
                 passed: output.passed,
             });
             result.diagnostics.extend(output.diagnostics);
             result.test_failures.extend(output.test_failures);
             if !output.passed {
-                result.outcome = Outcome::Fail { failed_step: step };
-                break;
+                failed = Some(Step::Test);
             }
+        }
+        if let Some(failed_step) = failed {
+            result.outcome = Outcome::Fail { failed_step };
         }
         result.total_ms = millis(started.elapsed());
         Ok(result)
+    }
+
+    /// Runs the compile part of the ladder (`Check`, and `Clippy` when
+    /// `up_to >= Clippy`) with a single cargo invocation.
+    ///
+    /// Returns the step reports, the diagnostics and the failed step, if any.
+    async fn run_compile_ladder(
+        &self,
+        up_to: Step,
+        root: &Path,
+        impact: &ImpactSet,
+        index: &CrateIndex,
+        build_args: &[String],
+    ) -> Result<(Vec<StepReport>, Vec<Diagnostic>, Option<Step>), RunnerError> {
+        let started = Instant::now();
+        let use_clippy = up_to >= Step::Clippy;
+        let mut args = vec![if use_clippy { "clippy" } else { "check" }.to_string()];
+        args.extend(compile_package_args(impact));
+        args.extend(["--all-targets".into(), "--message-format=json".into()]);
+        args.extend(build_args.iter().cloned());
+        let out = self.run_cargo(root, &args, &[]).await?;
+        let duration_ms = millis(started.elapsed());
+
+        let mut diagnostics = if use_clippy {
+            messages::parse_clippy_messages(&out.stdout, index)
+        } else {
+            messages::parse_compiler_messages(&out.stdout, Step::Check, index)
+        };
+        let has_error_in = |diagnostics: &[Diagnostic], step: Step| {
+            diagnostics
+                .iter()
+                .any(|d| d.step == step && d.severity == Severity::Error)
+        };
+        let check_error = has_error_in(&diagnostics, Step::Check);
+        let clippy_error = has_error_in(&diagnostics, Step::Clippy);
+        if !out.success && !check_error && !clippy_error {
+            // Failure outside the compiler (bad manifest, unknown package,
+            // target not installed...): surface cargo's stderr.
+            diagnostics.push(process_error(Step::Check, &args[0], &out));
+        }
+        let check_failed = check_error || (!out.success && !clippy_error);
+        let mut reports = vec![StepReport {
+            step: Step::Check,
+            duration_ms,
+            passed: !check_failed,
+        }];
+        let mut failed = check_failed.then_some(Step::Check);
+        if use_clippy && !check_failed {
+            reports.push(StepReport {
+                step: Step::Clippy,
+                duration_ms: 0,
+                passed: !clippy_error,
+            });
+            if clippy_error {
+                failed = Some(Step::Clippy);
+            }
+        }
+        Ok((reports, diagnostics, failed))
     }
 
     async fn run_fmt(
@@ -179,38 +326,13 @@ impl Runner {
             args.extend(package_args(impact));
         }
         args.extend(["--".into(), "--check".into()]);
-        let out = run_cargo(root, &args, &[]).await?;
+        let out = self.run_cargo(root, &args, &[]).await?;
         let mut diagnostics = messages::parse_fmt_diffs(&out.stdout, index);
         if !out.success && diagnostics.is_empty() {
             // rustfmt itself failed (syntax error, missing component...).
-            diagnostics.push(process_error(Step::Fmt, &out));
+            diagnostics.push(process_error(Step::Fmt, "fmt", &out));
         }
         let passed = !diagnostics.iter().any(|d| d.severity == Severity::Error);
-        Ok(StepOutput {
-            diagnostics,
-            test_failures: Vec::new(),
-            passed,
-        })
-    }
-
-    async fn run_compiler(
-        &self,
-        step: Step,
-        root: &Path,
-        impact: &ImpactSet,
-        index: &CrateIndex,
-    ) -> Result<StepOutput, RunnerError> {
-        let mut args = vec![step.as_str().to_string()];
-        args.extend(compile_package_args(impact));
-        args.extend(["--all-targets".into(), "--message-format=json".into()]);
-        let out = run_cargo(root, &args, &[]).await?;
-        let mut diagnostics = messages::parse_compiler_messages(&out.stdout, step, index);
-        let has_error = diagnostics.iter().any(|d| d.severity == Severity::Error);
-        if !out.success && !has_error {
-            // Failure outside the compiler (bad manifest, unknown package...).
-            diagnostics.push(process_error(step, &out));
-        }
-        let passed = out.success && !has_error;
         Ok(StepOutput {
             diagnostics,
             test_failures: Vec::new(),
@@ -223,16 +345,17 @@ impl Runner {
         root: &Path,
         impact: &ImpactSet,
         index: &CrateIndex,
+        build_args: &[String],
     ) -> Result<StepOutput, RunnerError> {
         let use_nextest = match self.config.nextest {
             NextestMode::Never => false,
             NextestMode::Always => {
-                if !nextest_installed(root).await {
+                if !self.nextest_installed(root).await {
                     return Err(RunnerError::NextestMissing);
                 }
                 true
             }
-            NextestMode::Auto => nextest_installed(root).await,
+            NextestMode::Auto => self.nextest_installed(root).await,
         };
 
         let mut args: Vec<String> = if use_nextest {
@@ -242,7 +365,10 @@ impl Runner {
         };
         args.extend(compile_package_args(impact));
         args.push("--no-fail-fast".into());
-        let out = run_cargo(root, &args, &[("RUST_BACKTRACE", "0")]).await?;
+        args.extend(build_args.iter().cloned());
+        let out = self
+            .run_cargo(root, &args, &[("RUST_BACKTRACE", "0")])
+            .await?;
 
         let test_failures = if use_nextest {
             test_out::parse_nextest(&out.stderr, index)
@@ -257,7 +383,7 @@ impl Runner {
         } else {
             if test_failures.is_empty() {
                 // Build failure or crash rather than failing tests.
-                diagnostics.push(process_error(Step::Test, &out));
+                diagnostics.push(process_error(Step::Test, &args[0], &out));
             }
             false
         };
@@ -288,12 +414,12 @@ fn compile_package_args(impact: &ImpactSet) -> Vec<String> {
 }
 
 /// Error diagnostic describing a failed process that produced no diagnostics.
-fn process_error(step: Step, out: &Captured) -> Diagnostic {
+fn process_error(step: Step, cargo_cmd: &str, out: &Captured) -> Diagnostic {
     let detail = tail_lines(&strip_ansi(&out.stderr), 20);
     let message = if detail.is_empty() {
-        format!("`cargo {step}` failed (exit code {:?})", out.code)
+        format!("`cargo {cargo_cmd}` failed (exit code {:?})", out.code)
     } else {
-        format!("`cargo {step}` failed: {detail}")
+        format!("`cargo {cargo_cmd}` failed: {detail}")
     };
     Diagnostic {
         severity: Severity::Error,
@@ -322,14 +448,15 @@ fn cargo_bin() -> OsString {
 ///
 /// The environment (including `CARGO_TARGET_DIR`) is inherited untouched,
 /// except for `extra_env` and color settings.
-async fn run_cargo(
+async fn run_cargo_with(
+    cargo: OsString,
     root: &Path,
     args: &[String],
     extra_env: &[(&str, &str)],
 ) -> Result<Captured, RunnerError> {
     let command_line = format!("cargo {}", args.join(" "));
     tracing::debug!(command = %command_line, "running");
-    let mut cmd = Command::new(cargo_bin());
+    let mut cmd = Command::new(cargo);
     cmd.args(args)
         .current_dir(root)
         .env("CARGO_TERM_COLOR", "never")
@@ -351,12 +478,4 @@ async fn run_cargo(
         stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
         stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
     })
-}
-
-/// `true` if `cargo nextest` is available.
-async fn nextest_installed(root: &Path) -> bool {
-    matches!(
-        run_cargo(root, &["nextest".into(), "--version".into()], &[]).await,
-        Ok(out) if out.success
-    )
 }

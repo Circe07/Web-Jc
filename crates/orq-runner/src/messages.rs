@@ -174,6 +174,19 @@ pub(crate) fn parse_compiler_messages(
     out
 }
 
+/// Parses the output of a single `cargo clippy --message-format=json` run,
+/// assigning each diagnostic to [`Step::Clippy`] if its code starts with
+/// `clippy::` and to [`Step::Check`] otherwise.
+pub(crate) fn parse_clippy_messages(stdout: &str, index: &CrateIndex) -> Vec<Diagnostic> {
+    let mut diagnostics = parse_compiler_messages(stdout, Step::Check, index);
+    for d in &mut diagnostics {
+        if d.code.as_deref().is_some_and(|c| c.starts_with("clippy::")) {
+            d.step = Step::Clippy;
+        }
+    }
+    diagnostics
+}
+
 /// Parses `cargo fmt -- --check` output (`Diff in <file>:<line>:` hunks) into
 /// warnings.
 pub(crate) fn parse_fmt_diffs(output: &str, index: &CrateIndex) -> Vec<Diagnostic> {
