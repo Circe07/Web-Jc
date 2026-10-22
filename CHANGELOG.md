@@ -4,6 +4,33 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] - 2026-10-22
+
+### Added
+- `orq mcp`: MCP server over stdio (`claude mcp add orq -- orq mcp`) with the
+  tools `verify`, `run_affected_tests`, `explain_error` and `impact`.
+  `verify` returns the compact text plus structured JSON.
+- `orq setup [--apply] [--cranelift]`: detects nightly + Cranelift, mold/wild,
+  sccache and cargo-nextest. It proposes a dev-profile block for
+  `.cargo/config.toml` as a diff and only writes it with `--apply`, backing up
+  the previous file first. It never installs anything.
+- `orq stats [--json] [--last N]`: median and p90 duration, cache hit rate,
+  tokens, and hit/miss and daemon/in-process breakdowns from
+  `target/orq/stats.jsonl`. `orq verify` and the MCP server append one record
+  per run.
+- `benches/compare.sh` and `docs/benchmarks.md`: `cargo build && cargo test`
+  compared with `orq verify`.
+- `docs/claude-code.md`: setup guide for Claude Code.
+- Diagnostics now carry the primary span label
+  (`^ expected `u64`, found `String``).
+
+### Changed
+- The workspace root is found without spawning cargo, which saves about 70 ms
+  per run.
+
+### Fixed
+- A tracked symlink to a directory no longer disables the result cache.
+
 ## [0.1.0] - 2026-10-22
 
 ### Added

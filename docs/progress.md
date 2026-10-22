@@ -104,4 +104,50 @@ Pending:
   in-process mode.
 - `rustc -Vv` still costs ~70 ms of every in-process run. It could be memoized
   on disk with a toolchain fingerprint if needed.
-- Next: wave 3 (T3.1 MCP, T3.2 `orq setup`, T3.3 stats/benchmarks), then T3.4.
+
+## Wave 3 — MCP, setup and metrics · closed 2026-10-22 · `v0.2.0`
+
+Before launching, the lead moved the shared logic into libraries so that the
+three agents never touched the same file:
+- `orq_core::root` (workspace discovery) and `orq_core::stats` (`stats.jsonl`).
+- `orq_daemon::client::verify`: delegates to the daemon or runs in-process
+  under the lock.
+- `orq_runner::explain`.
+- A stub for each of `orq mcp`, `orq setup` and `orq stats`, in its own file.
+
+| Task | Result | Tests |
+| --- | --- | --- |
+| T3.1 `orq-mcp` | `orq mcp` over stdio (rmcp 3.7, `ServerHandler` written by hand), tools `verify`, `run_affected_tests`, `explain_error`, `impact`; `docs/claude-code.md` | 4 (duplex JSON-RPC) + 1 (real `orq mcp` binary) |
+| T3.2 `orq setup` | detects nightly/Cranelift, mold/wild, sccache, nextest; marked block in `.cargo/config.toml` for dev only; backup; refuses if it would duplicate tables; Cranelift opt-in | 13 unit + 3 integration |
+| T3.3 metrics | `orq stats` (nearest-rank median/p90, hit rate, tokens, breakdowns), `benches/compare.sh`, `docs/benchmarks.md` (multi + ripgrep) | 6 unit + 2 integration |
+| T3.4 close (lead) | full README, CHANGELOG, `v0.2.0` | — |
+
+Workspace total: 121 tests; fmt, clippy `-D warnings` and tests are green.
+
+Bug found by the benchmark and fixed by the lead: on ripgrep the cache never
+hit. A tracked symlink to a directory (`HomebrewFormula`) made the cache key
+fail with `EISDIR`. Symlinks are now hashed by their target. The repeated
+`orq verify --up-to check` on ripgrep went from 3.5 s (no cache) to
+125–171 ms. A regression test was added.
+
+Dogfooding: `orq verify --files crates/orq-cache/src/store.rs --up-to clippy`
+on this repo gives `PASS fmt+check+clippy · crates: orq-cache, orq-cli,
+orq-daemon, orq-mcp`, and `orq stats` summarizes it.
+
+### Definition of done (PLAN.md §9)
+
+- [x] `orq verify` only compiles the affected crates and its output stays within the budget.
+- [x] A repeated verify without changes answers from the cache in < 200 ms: ~130 ms in-process, 13 ms through the daemon.
+- [x] The daemon keeps state warm and precompiles after each change.
+- [x] `orq mcp` works when registered in Claude Code (`claude mcp add orq -- orq mcp`); its tool descriptions tell the agent to use it instead of `cargo build`.
+- [x] `orq setup` proposes and applies the fast dev profile.
+- [x] `orq stats` and `benches/compare.sh` show time and tokens against the baseline: 40–56x fewer tokens.
+- [x] CI is green on Linux and macOS; README and CHANGELOG are complete.
+
+Known limitations:
+- The daemon is Unix-only.
+- A cold `orq verify` without the daemon is 1.4–2x slower than
+  `cargo build && cargo test`, because it also runs fmt and clippy.
+- `rustc -Vv` costs ~70 ms per in-process run.
+- The `v0.1.0` and `v0.2.0` tags only exist locally: this session can only
+  push to its branch.

@@ -759,7 +759,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "orq-cache"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "blake3",
  "orq-core",
@@ -771,7 +771,7 @@ dependencies = [
 
 [[package]]
 name = "orq-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -794,7 +794,7 @@ dependencies = [
 
 [[package]]
 name = "orq-compress"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "insta",
  "orq-core",
@@ -803,7 +803,7 @@ dependencies = [
 
 [[package]]
 name = "orq-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -815,7 +815,7 @@ dependencies = [
 
 [[package]]
 name = "orq-daemon"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "notify",
  "notify-debouncer-full",
@@ -832,7 +832,7 @@ dependencies = [
 
 [[package]]
 name = "orq-impact"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "cargo_metadata",
  "orq-core",
@@ -843,7 +843,7 @@ dependencies = [
 
 [[package]]
 name = "orq-mcp"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "orq-compress",
  "orq-core",
@@ -860,7 +860,7 @@ dependencies = [
 
 [[package]]
 name = "orq-runner"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "insta",
  "orq-core",
