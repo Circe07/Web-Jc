@@ -1,0 +1,10 @@
+---
+source: crates/orq-compress/tests/compress.rs
+expression: out.text
+---
+FAIL test (1 failed test) · crates: api · 1.8s
+[T1] tests::adds
+    thread 'tests::adds' panicked at src/lib.rs:9:5:
+    assertion `left == right` failed
+    left: 3
+    right: 4

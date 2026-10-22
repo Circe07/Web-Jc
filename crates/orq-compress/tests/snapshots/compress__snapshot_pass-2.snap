@@ -1,0 +1,5 @@
+---
+source: crates/orq-compress/tests/compress.rs
+expression: es.text
+---
+PASS check+clippy+test · crates: api, cli · 3.2s (caché: no)
