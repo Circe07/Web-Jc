@@ -1,6 +1,6 @@
 ---
 source: crates/orq-runner/tests/fixtures.rs
-expression: result
+expression: normalized
 ---
 {
   "outcome": {
@@ -31,13 +31,13 @@ expression: result
   "diagnostics": [
     {
       "severity": "warning",
-      "code": "clippy::needless_return",
-      "message": "unneeded `return` statement",
+      "code": "clippy::ptr_arg",
+      "message": "writing `&Vec` instead of `&[_]` involves a new object where a slice will do",
       "file": "src/lib.rs",
-      "line": 2,
-      "column": 5,
-      "snippet": "    return v.len() == 0;",
-      "suggestion": "v.len() == 0",
+      "line": 1,
+      "column": 24,
+      "snippet": "pub fn is_empty_len(v: &Vec<u32>) -> bool {",
+      "suggestion": "&[u32]",
       "crate_id": {
         "name": "clippy-warn",
         "manifest_path": "[manifest]"
@@ -53,6 +53,36 @@ expression: result
       "column": 24,
       "snippet": "pub fn is_empty_len(v: &Vec<u32>) -> bool {",
       "suggestion": "&[u32]",
+      "crate_id": {
+        "name": "clippy-warn",
+        "manifest_path": "[manifest]"
+      },
+      "step": "clippy"
+    },
+    {
+      "severity": "warning",
+      "code": "clippy::needless_return",
+      "message": "unneeded `return` statement",
+      "file": "src/lib.rs",
+      "line": 2,
+      "column": 5,
+      "snippet": "    return v.len() == 0;",
+      "suggestion": "v.len() == 0",
+      "crate_id": {
+        "name": "clippy-warn",
+        "manifest_path": "[manifest]"
+      },
+      "step": "clippy"
+    },
+    {
+      "severity": "warning",
+      "code": "clippy::needless_return",
+      "message": "unneeded `return` statement",
+      "file": "src/lib.rs",
+      "line": 2,
+      "column": 5,
+      "snippet": "    return v.len() == 0;",
+      "suggestion": "v.len() == 0",
       "crate_id": {
         "name": "clippy-warn",
         "manifest_path": "[manifest]"
@@ -68,36 +98,6 @@ expression: result
       "column": 12,
       "snippet": "    return v.len() == 0;",
       "suggestion": "v.is_empty()",
-      "crate_id": {
-        "name": "clippy-warn",
-        "manifest_path": "[manifest]"
-      },
-      "step": "clippy"
-    },
-    {
-      "severity": "warning",
-      "code": "clippy::needless_return",
-      "message": "unneeded `return` statement",
-      "file": "src/lib.rs",
-      "line": 2,
-      "column": 5,
-      "snippet": "    return v.len() == 0;",
-      "suggestion": "v.len() == 0",
-      "crate_id": {
-        "name": "clippy-warn",
-        "manifest_path": "[manifest]"
-      },
-      "step": "clippy"
-    },
-    {
-      "severity": "warning",
-      "code": "clippy::ptr_arg",
-      "message": "writing `&Vec` instead of `&[_]` involves a new object where a slice will do",
-      "file": "src/lib.rs",
-      "line": 1,
-      "column": 24,
-      "snippet": "pub fn is_empty_len(v: &Vec<u32>) -> bool {",
-      "suggestion": "&[u32]",
       "crate_id": {
         "name": "clippy-warn",
         "manifest_path": "[manifest]"

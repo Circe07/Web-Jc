@@ -39,7 +39,13 @@ async fn verify(root: &Path, impact: &ImpactSet, up_to: Step) -> VerifyResult {
 /// (which differs between `cargo test` and nextest) normalized.
 macro_rules! assert_result_snapshot {
     ($name:expr, $result:expr) => {
-        insta::assert_json_snapshot!($name, $result, {
+        // Cargo builds `lib` and `lib test` in parallel, so their messages can
+        // interleave differently from run to run: snapshot a stable order.
+        let mut normalized = $result.clone();
+        normalized.diagnostics.sort_by_key(|d| {
+            (d.step, d.file.clone(), d.line, d.column, d.message.clone())
+        });
+        insta::assert_json_snapshot!($name, normalized, {
             ".total_ms" => 0,
             ".steps[].duration_ms" => 0,
             ".**.manifest_path" => "[manifest]",
