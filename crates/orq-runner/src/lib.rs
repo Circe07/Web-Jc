@@ -15,6 +15,7 @@ mod messages;
 mod signatures;
 mod targets;
 mod test_out;
+mod toolchain;
 mod util;
 
 use std::collections::HashSet;
@@ -127,11 +128,33 @@ impl Runner {
         args: &[String],
         extra_env: &[(&str, &str)],
     ) -> Result<Captured, RunnerError> {
-        run_cargo_with(self.cargo_bin(), root, args, extra_env).await
+        // Calling the toolchain's binaries directly skips a rustup proxy hop
+        // (~35 ms) on every cargo, clippy, rustfmt and rustc call. Only for
+        // the default `cargo`: an explicit binary is used as given.
+        if self.cargo.is_none() && std::env::var_os("CARGO").is_none() {
+            if let Some(dir) = toolchain::bin_dir(root).await {
+                if let Some(path) = toolchain::path_with(&dir) {
+                    return run_cargo_with(
+                        dir.join("cargo").into(),
+                        root,
+                        args,
+                        extra_env,
+                        Some(path),
+                    )
+                    .await;
+                }
+            }
+        }
+        run_cargo_with(self.cargo_bin(), root, args, extra_env, None).await
     }
 
-    /// `true` if `cargo nextest` is available.
+    /// `true` if `cargo nextest` is available: a `cargo-nextest` on `PATH`
+    /// (looked up, not spawned), or, with an explicit cargo binary, whatever
+    /// `cargo nextest --version` says.
     async fn nextest_installed(&self, root: &Path) -> bool {
+        if self.cargo.is_none() {
+            return toolchain::on_path("cargo-nextest");
+        }
         matches!(
             self.run_cargo(root, &["nextest".into(), "--version".into()], &[]).await,
             Ok(out) if out.success
@@ -742,6 +765,7 @@ async fn run_cargo_with(
     root: &Path,
     args: &[String],
     extra_env: &[(&str, &str)],
+    path: Option<OsString>,
 ) -> Result<Captured, RunnerError> {
     let command_line = format!("cargo {}", args.join(" "));
     tracing::debug!(command = %command_line, "running");
@@ -756,6 +780,9 @@ async fn run_cargo_with(
         .kill_on_drop(true);
     for (k, v) in extra_env {
         cmd.env(k, v);
+    }
+    if let Some(path) = path {
+        cmd.env("PATH", path);
     }
     let output = cmd.output().await.map_err(|source| RunnerError::Spawn {
         command: command_line,

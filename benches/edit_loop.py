@@ -19,6 +19,11 @@ Checkers:
           (the same lints with the community test runner; needs cargo-nextest)
   orq     `orq verify --no-daemon --no-cache --up-to test`
           (shown as "n/a" for a configuration orq cannot express)
+  orq-daemon
+          `orq verify --up-to test` with the daemon running, asked --think
+          seconds after the edit (untimed), as when the agent's model is still
+          writing its reply; runs on its own copy and target dir so the
+          daemon never competes with the other checkers
 
 Usage:
   python3 benches/edit_loop.py --project eval/projects/tasktrack \\
@@ -39,7 +44,7 @@ import tempfile
 import time
 from pathlib import Path
 
-CHECKERS = ("cargo", "nextest", "orq")
+CHECKERS = ("cargo", "nextest", "orq", "orq-daemon")
 
 # Named build configurations. "env" overrides the caller's environment;
 # "cargo_args" go right after `cargo` (global flags such as --config, which
@@ -96,9 +101,11 @@ def cargo_check(project: Path, env: dict, cargo_args: list[str],
     return t1 + t2, rc
 
 
-def orq_check(orq: str, project: Path, env: dict) -> tuple[float, int]:
-    files = ",".join(str(p.relative_to(project)) for p in project.rglob("*.rs")
-                     if "target" not in p.parts)
+def orq_check(orq: str, project: Path, env: dict, changed: str | None = None) -> tuple[float, int]:
+    """`orq verify` told which file changed, as the Claude Code hook does.
+    Without `changed` (the warm-up), every source file counts as changed."""
+    files = changed or ",".join(str(p.relative_to(project)) for p in project.rglob("*.rs")
+                                if "target" not in p.parts)
     return run([orq, "verify", "--no-daemon", "--no-cache", "--up-to", "test",
                 "--files", files], project, env)
 
@@ -117,6 +124,46 @@ def apply_edit(project: Path, rel: str, n: int) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def daemon_times(args, env: dict, cargo_args: list[str]) -> dict[str, float]:
+    """Median `orq verify` latency per edit kind with a warm daemon."""
+    work = Path(tempfile.mkdtemp(prefix="edit-loop-daemon-"))
+    env = {k: v for k, v in env.items() if k != "ORQ_NO_DAEMON"}
+    project = work / "project"
+    try:
+        shutil.copytree(args.project, project, copy_function=shutil.copy,
+                        ignore=shutil.ignore_patterns("target", "tasks"))
+        (project / "orq.toml").write_text("deny_warnings = true\n", encoding="utf-8")
+        env["CARGO_TARGET_DIR"] = str(work / "target")
+        # A git repository, as real projects are: the daemon's speculative
+        # results are keyed by the changes git reports.
+        for cmd in (["git", "init", "-q"], ["git", "add", "-A"],
+                    ["git", "-c", "user.name=bench", "-c", "user.email=bench@example.com",
+                     "commit", "-qm", "base"]):
+            run(cmd, project, env)
+        cargo_check(project, env, cargo_args)
+        orq_check(args.orq, project, env)
+        run([args.orq, "daemon", "start"], project, env)
+        time.sleep(args.think)
+        out = {}
+        n = 10_000
+        for kind, rel in EDITS.items():
+            times = []
+            for _ in range(args.iterations):
+                n += 1
+                apply_edit(project, rel, n)
+                time.sleep(args.think)
+                secs, rc = run([args.orq, "verify", "--up-to", "test", "--files", rel],
+                               project, env)
+                if rc != 0:
+                    return {kind: f"failed after a {kind} edit" for kind in EDITS}
+                times.append(secs)
+            out[kind] = round(statistics.median(times), 2)
+        return out
+    finally:
+        run([args.orq, "daemon", "stop"], project, env)
+        shutil.rmtree(work, ignore_errors=True)
+
+
 def bench_config(name: str, args, nextest: bool) -> dict:
     conf = CONFIGS[name]
     tool = conf.get("tool")
@@ -124,8 +171,9 @@ def bench_config(name: str, args, nextest: bool) -> dict:
         return {"config": name, "error": f"not installed ({tool})"}
     cargo_args = conf.get("cargo_args", [])
     use_orq = conf.get("orq", True)
-    checkers = [c for c in args.checker or CHECKERS
-                if (c != "nextest" or nextest) and (c != "orq" or use_orq)]
+    wanted = args.checker or CHECKERS
+    checkers = [c for c in wanted if c != "orq-daemon"
+                and (c != "nextest" or nextest) and (c != "orq" or use_orq)]
     env = dict(os.environ)
     env.update(conf.get("env", {}))
     env.update({"CARGO_TERM_COLOR": "never", "RUST_BACKTRACE": "0", "ORQ_NO_DAEMON": "1"})
@@ -153,12 +201,16 @@ def bench_config(name: str, args, nextest: bool) -> dict:
                 for checker in checkers:
                     n += 1
                     apply_edit(project, rel, n)
-                    secs, rc = (orq_check(args.orq, project, env) if checker == "orq"
+                    secs, rc = (orq_check(args.orq, project, env, rel) if checker == "orq"
                                 else cargo_check(project, env, cargo_args, checker))
                     if rc != 0:
                         return {"config": name, "error": f"{checker} failed after a {kind} edit"}
                     times[checker].append(secs)
             out["edits"][kind] = {c: round(statistics.median(v), 2) for c, v in times.items()}
+        if "orq-daemon" in wanted and use_orq and not cargo_args:
+            for kind, secs in daemon_times(args, env, cargo_args).items():
+                out["edits"][kind]["orq-daemon"] = secs
+        for kind in EDITS:
             for c in CHECKERS:  # checkers that did not run: say why
                 if c not in out["edits"][kind]:
                     out["edits"][kind][c] = (
@@ -178,6 +230,8 @@ def main() -> int:
     ap.add_argument("--project", default="eval/projects/tasktrack", type=Path)
     ap.add_argument("--orq", default="target/release/orq")
     ap.add_argument("--iterations", type=int, default=5)
+    ap.add_argument("--think", type=float, default=3.0,
+                    help="seconds between an edit and the daemon verify (untimed)")
     ap.add_argument("--config", action="append", choices=sorted(CONFIGS),
                     help="configuration to measure (repeatable; default: default)")
     ap.add_argument("--checker", action="append", choices=CHECKERS,
