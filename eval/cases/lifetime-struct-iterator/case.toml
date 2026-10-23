@@ -1,0 +1,21 @@
+id = "lifetime-struct-iterator"
+category = "lifetime (E0106 in a struct + Iterator impl)"
+difficulty = "hard"
+description = "Make the zero-copy tokenizer compile and pass its tests. It must keep borrowing from the input instead of allocating."
+up_to = "test"
+expected_fail_step = "check"
+
+[[facts]]
+code = "E0106"
+file = "src/lib.rs"
+line = 6
+
+[[facts]]
+code = "E0106"
+file = "src/lib.rs"
+line = 12
+
+[[facts]]
+code = "E0106"
+file = "src/lib.rs"
+line = 45

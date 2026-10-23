@@ -187,6 +187,11 @@ def load_case(case_dir: Path) -> dict:
     return data
 
 
+def active_seconds(r: dict) -> float:
+    """Wall time minus deliberate waits (rate-limit pacing, retry backoff)."""
+    return r["wall_seconds"] - r.get("wait_seconds", 0.0)
+
+
 def summarize(records: list[dict]) -> dict:
     """Aggregate run records per mode: counts, means and estimated cost."""
     modes: dict[str, dict] = {}
@@ -209,6 +214,10 @@ def summarize(records: list[dict]) -> dict:
             "mean_turns": mean(r["turns"] for r in ok_runs),
             "mean_tokens": mean(r["input_tokens"] + r["output_tokens"] for r in ok_runs),
             "mean_feedback_tokens": mean(fb),
+            "mean_active_seconds": mean(active_seconds(r) for r in ok_runs),
+            "mean_model_seconds": mean(r.get("model_seconds", 0.0) for r in ok_runs),
+            "mean_tool_seconds": mean(r.get("cargo_seconds", 0.0) + r.get("orq_seconds", 0.0)
+                                      for r in ok_runs),
             "cost_total": sum(costs),
             "cost_mean": mean(costs),
         }
@@ -223,20 +232,26 @@ def render_markdown(run_id: str, model: str, args_desc: str, records: list[dict]
              "Tokens are input (uncached + cache read + cache write) plus output. "
              "Cost is an **estimate** from the price table in the script "
              "(cache reads 0.1x, cache writes 1.25x of input).", "",
+             "Times exclude deliberate waits (rate-limit pacing, retry backoff). "
+             "*Tools* is cargo plus orq: the harness always runs cargo to judge "
+             "success, so orq mode pays for both.", "",
              "## Per mode", "",
              "| mode | runs | success rate | mean turns | mean in+out tokens | "
-             "mean feedback tokens/turn | est. cost/run | est. cost total | errors |",
-             "|---|---|---|---|---|---|---|---|---|"]
+             "mean feedback tokens/turn | mean time (s) | model (s) | tools (s) | "
+             "est. cost/run | est. cost total | errors |",
+             "|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for mode, s in modes.items():
         lines.append(
             f"| {mode} | {s['runs']} | {s['successes']}/{s['runs'] - s['errors']} "
             f"({s['success_rate']:.0%}) | {s['mean_turns']:.2f} | {s['mean_tokens']:.0f} | "
-            f"{s['mean_feedback_tokens']:.0f} | ${s['cost_mean']:.4f} | "
+            f"{s['mean_feedback_tokens']:.0f} | {s['mean_active_seconds']:.1f} | "
+            f"{s['mean_model_seconds']:.1f} | {s['mean_tool_seconds']:.1f} | "
+            f"${s['cost_mean']:.4f} | "
             f"${s['cost_total']:.4f} | {s['errors']} |")
     lines += ["", "## Per case", "",
               "| case | mode | runs | success | mean turns | mean in+out tokens | "
-              "mean feedback tokens/turn |",
-              "|---|---|---|---|---|---|---|"]
+              "mean feedback tokens/turn | mean time (s) |",
+              "|---|---|---|---|---|---|---|---|"]
     for case in sorted({r["case"] for r in records}):
         for mode in sorted({r["mode"] for r in records}):
             rs = [r for r in records if r["case"] == case and r["mode"] == mode
@@ -245,7 +260,7 @@ def render_markdown(run_id: str, model: str, args_desc: str, records: list[dict]
             if not allrs:
                 continue
             if not rs:
-                lines.append(f"| {case} | {mode} | {len(allrs)} | error | - | - | - |")
+                lines.append(f"| {case} | {mode} | {len(allrs)} | error | - | - | - | - |")
                 continue
             fb = [t for r in rs for t in r["feedback_tokens"]]
             lines.append(
@@ -253,7 +268,8 @@ def render_markdown(run_id: str, model: str, args_desc: str, records: list[dict]
                 f"{sum(1 for r in rs if r['success'])}/{len(rs)} | "
                 f"{sum(r['turns'] for r in rs) / len(rs):.2f} | "
                 f"{sum(r['input_tokens'] + r['output_tokens'] for r in rs) / len(rs):.0f} | "
-                f"{(sum(fb) / len(fb)) if fb else 0:.0f} |")
+                f"{(sum(fb) / len(fb)) if fb else 0:.0f} | "
+                f"{sum(active_seconds(r) for r in rs) / len(rs):.1f} |")
     errs = [r for r in records if r["error"]]
     if errs:
         lines += ["", "## Errors", ""]
@@ -430,6 +446,8 @@ class GeminiClient:
         self.interval = 60.0 / rpm if rpm > 0 else 0.0
         self.retries = retries
         self.last_call = 0.0
+        # Seconds spent sleeping on purpose (rpm pacing, backoff); not model time.
+        self.waited = 0.0
         self.beta = SimpleNamespace(messages=SimpleNamespace(create=self._create))
 
     def _create(self, *, model, max_tokens, system, messages, **_ignored):
@@ -441,6 +459,7 @@ class GeminiClient:
             wait = self.last_call + self.interval - time.monotonic()
             if wait > 0:
                 time.sleep(wait)
+                self.waited += wait
             self.last_call = time.monotonic()
             req = urllib.request.Request(url, data=body, method="POST", headers={
                 "Content-Type": "application/json", "x-goog-api-key": self.api_key})
@@ -453,12 +472,14 @@ class GeminiClient:
                     raise QuotaExhausted(f"Gemini daily quota exhausted: {detail[:300]}") from e
                 if e.code in (429, 500, 503) and attempt < self.retries:
                     time.sleep(delay)
+                    self.waited += delay
                     delay = min(delay * 2, 120.0)
                     continue
                 raise ModelCallError(f"Gemini HTTP {e.code}: {detail[:500]}") from e
             except (urllib.error.URLError, TimeoutError) as e:
                 if attempt < self.retries:
                     time.sleep(delay)
+                    self.waited += delay
                     delay = min(delay * 2, 120.0)
                     continue
                 raise ModelCallError(f"Gemini connection error: {e}") from e
@@ -521,6 +542,8 @@ def run_one(case: dict, mode: str, repeat: int, args, client, run_id: str) -> di
         "input_tokens": 0, "output_tokens": 0,
         "cache_read_tokens": 0, "cache_creation_tokens": 0,
         "feedback_tokens": [], "stop_reasons": [], "wall_seconds": 0.0,
+        "cargo_seconds": 0.0, "orq_seconds": 0.0, "model_seconds": 0.0,
+        "wait_seconds": 0.0,
         "cost_usd": None, "error": None,
     }
     up_to = case.get("up_to", "test")
@@ -533,12 +556,32 @@ def run_one(case: dict, mode: str, repeat: int, args, client, run_id: str) -> di
         if args.mock:
             client = MockClient(case["dir"] / "fix", 1 if mode == "orq" else 2)
 
+        def timed_judge() -> tuple[bool, str]:
+            t = time.monotonic()
+            result = judge(project, up_to, env)
+            rec["cargo_seconds"] += time.monotonic() - t
+            return result
+
         def feedback_for(raw_out: str) -> str:
             if mode == "raw":
                 return raw_out
-            return orq_feedback(args.orq, project, up_to, args.budget, env)
+            t = time.monotonic()
+            report = orq_feedback(args.orq, project, up_to, args.budget, env)
+            rec["orq_seconds"] += time.monotonic() - t
+            return report
 
-        passed, raw_out = judge(project, up_to, env)
+        def timed_call(messages):
+            t = time.monotonic()
+            waited = getattr(client, "waited", 0.0)
+            try:
+                return call_model(client, args.model, args.effort, messages, fallbacks,
+                                  real=not args.mock)
+            finally:
+                w = getattr(client, "waited", 0.0) - waited
+                rec["wait_seconds"] += w
+                rec["model_seconds"] += time.monotonic() - t - w
+
+        passed, raw_out = timed_judge()
         if passed:
             raise HarnessError("broken project already passes; invalid case")
         fb = feedback_for(raw_out)
@@ -549,8 +592,7 @@ def run_one(case: dict, mode: str, repeat: int, args, client, run_id: str) -> di
                      and use_fallbacks(args.model, args.no_fallbacks))
 
         for _turn in range(args.max_turns):
-            resp = call_model(client, args.model, args.effort, messages, fallbacks,
-                              real=not args.mock)
+            resp = timed_call(messages)
             rec["turns"] += 1
             u = resp.usage
             rec["input_tokens"] += getattr(u, "input_tokens", 0) or 0
@@ -566,7 +608,7 @@ def run_one(case: dict, mode: str, repeat: int, args, client, run_id: str) -> di
                 break
             text = response_text(resp)
             written, rejected = apply_files(project, parse_file_blocks(text))
-            passed, raw_out = judge(project, up_to, env)
+            passed, raw_out = timed_judge()
             if passed:
                 rec["success"] = True
                 rec["outcome"] = "success"
@@ -596,6 +638,8 @@ def run_one(case: dict, mode: str, repeat: int, args, client, run_id: str) -> di
     finally:
         shutil.rmtree(work, ignore_errors=True)
     rec["wall_seconds"] = round(time.monotonic() - start, 2)
+    for k in ("cargo_seconds", "orq_seconds", "model_seconds", "wait_seconds"):
+        rec[k] = round(rec[k], 2)
     rec["cost_usd"] = cost_usd(args.model, rec["input_tokens"], rec["output_tokens"],
                                rec["cache_read_tokens"], rec["cache_creation_tokens"])
     return rec
@@ -640,6 +684,8 @@ def main(argv=None) -> int:
     if "orq" in modes and shutil.which(args.orq) is None and not Path(args.orq).exists():
         print(f"error: orq binary not found: {args.orq} (use --orq PATH)", file=sys.stderr)
         return 2
+    if Path(args.orq).exists():
+        args.orq = str(Path(args.orq).resolve())
     cases_dir = Path(args.cases)
     ids = args.case or sorted(p.name for p in cases_dir.iterdir() if (p / "case.toml").is_file())
     cases = []

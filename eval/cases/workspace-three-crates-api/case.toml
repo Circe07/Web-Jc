@@ -1,0 +1,22 @@
+id = "workspace-three-crates-api"
+category = "workspace (API change breaks 2 of 3 crates)"
+difficulty = "hard"
+description = "The `ledger` crate moved to its v2 API on purpose (currency-aware `Money`, validated `Entry::new`). Adapt `billing` and `report` so the workspace builds and its tests pass; invoices are in euros. Do not change `ledger`."
+up_to = "test"
+expected_fail_step = "check"
+
+[[facts]]
+code = "E0423"
+file = "crates/billing/src/lib.rs"
+line = 18
+
+[[facts]]
+code = "E0308"
+file = "crates/billing/src/lib.rs"
+line = 18
+label = "found `Result<Entry, EntryError>`"
+
+[[facts]]
+code = "E0609"
+file = "crates/billing/src/lib.rs"
+line = 32

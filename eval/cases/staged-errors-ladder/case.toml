@@ -1,0 +1,17 @@
+id = "staged-errors-ladder"
+category = "staged (check, then clippy, then test)"
+difficulty = "hard"
+description = "Make the inventory crate build cleanly (`cargo clippy -- -D warnings`) and pass its tests. Keep the public API."
+up_to = "test"
+expected_fail_step = "check"
+
+[[facts]]
+code = "E0308"
+file = "src/lib.rs"
+line = 14
+label = "expected `u32`, found `u64`"
+
+[[facts]]
+code = "E0277"
+file = "src/lib.rs"
+line = 14

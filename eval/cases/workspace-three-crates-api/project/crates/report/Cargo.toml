@@ -1,0 +1,9 @@
+[package]
+name = "report"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+ledger = { path = "../ledger" }
+billing = { path = "../billing" }

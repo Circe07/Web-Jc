@@ -1,0 +1,18 @@
+id = "many-failing-tests-two-bugs"
+category = "logic-bug (2 bugs, 4 failing tests)"
+difficulty = "hard"
+description = "The duration parser and renderer fail several tests. Fix the library so every test passes; the tests are correct."
+up_to = "test"
+expected_fail_step = "test"
+
+[[facts]]
+test = "tests::parses_minutes"
+
+[[facts]]
+test = "tests::parses_mixed"
+
+[[facts]]
+test = "tests::renders_mixed"
+
+[[facts]]
+test = "tests::round_trips"

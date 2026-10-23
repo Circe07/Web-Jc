@@ -58,7 +58,7 @@ Rules:
 
 ## Corpus
 
-22 cases (`eval/validate.sh` checks all of them). "Fails at" is
+28 cases (`eval/validate.sh` checks all of them). "Fails at" is
 `expected_fail_step`; every case must pass up to its `up_to` after the fix.
 
 | id | category | difficulty | fails at |
@@ -85,6 +85,12 @@ Rules:
 | `logic-page-count-rounding` | logic-bug (integer rounding) | easy | test |
 | `panic-index-out-of-bounds` | test-panic (index) | medium | test |
 | `panic-unwrap-none` | test-panic (`unwrap` on `None`) | medium | test |
+| `staged-errors-ladder` | staged (E0308, then clippy, then a test) | hard | check |
+| `thread-shared-counter` | concurrency (`Rc` across threads, E0277) | medium | check |
+| `generic-bounds-cascade` | missing-trait (7 errors over 4 generic fns) | hard | check |
+| `lifetime-struct-iterator` | lifetime (E0106 in a struct + `Iterator` impl) | hard | check |
+| `workspace-three-crates-api` | workspace (API change breaks 2 of 3 crates) | hard | check |
+| `many-failing-tests-two-bugs` | logic-bug (2 bugs, 4 failing tests) | hard | test |
 
 Notes: `clippy-needless-range-loop` uses the lint name as `code`
 (`clippy::needless_range_loop`). `logic-wrong-boolean` uses

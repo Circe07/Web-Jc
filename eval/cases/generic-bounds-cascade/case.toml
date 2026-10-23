@@ -1,0 +1,22 @@
+id = "generic-bounds-cascade"
+category = "missing-trait (7 errors over 4 generic fns)"
+difficulty = "hard"
+description = "Make the generic helpers compile and pass their tests without changing what they compute."
+up_to = "test"
+expected_fail_step = "check"
+
+[[facts]]
+code = "E0599"
+file = "src/lib.rs"
+line = 11
+
+[[facts]]
+code = "E0277"
+file = "src/lib.rs"
+line = 23
+label = "the trait `Clone` is not implemented for `T`"
+
+[[facts]]
+code = "E0599"
+file = "src/lib.rs"
+line = 33

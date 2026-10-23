@@ -1,0 +1,12 @@
+id = "thread-shared-counter"
+category = "concurrency (Send, E0277)"
+difficulty = "medium"
+description = "Make `count_words` compile and count correctly while keeping one thread per chunk."
+up_to = "test"
+expected_fail_step = "check"
+
+[[facts]]
+code = "E0277"
+file = "src/lib.rs"
+line = 21
+label = "cannot be sent between threads safely"
