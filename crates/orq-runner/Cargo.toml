@@ -13,6 +13,7 @@ categories = ["development-tools", "development-tools::build-utils"]
 readme = "../../README.md"
 
 [dependencies]
+cargo_metadata.workspace = true
 orq-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true

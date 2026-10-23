@@ -8,12 +8,15 @@
 #![warn(missing_docs)]
 
 pub mod explain;
+mod failures;
 pub mod fix;
 mod index;
 mod messages;
+mod targets;
 mod test_out;
 mod util;
 
+use std::collections::HashSet;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -82,6 +85,7 @@ impl From<RunnerError> for CoreError {
 pub struct Runner {
     config: Config,
     cargo: Option<OsString>,
+    failing_first: bool,
 }
 
 /// Raw output of one process.
@@ -138,7 +142,22 @@ impl Runner {
         Self {
             config,
             cargo: None,
+            failing_first: true,
         }
+    }
+
+    /// Enables or disables "failing tests first" (enabled by default).
+    ///
+    /// When enabled, the Test step first runs only the tests that failed in
+    /// the previous run of the same workspace (remembered in
+    /// `<target>/orq/last_failures.json`). If any of them still fails the
+    /// step stops there: the report holds just those failures plus a `Note`
+    /// diagnostic saying the rest of the suite was not run. Otherwise the
+    /// full suite runs as usual.
+    #[must_use]
+    pub fn with_failing_first(mut self, enabled: bool) -> Self {
+        self.failing_first = enabled;
+        self
     }
 
     /// Uses `cargo` as the cargo executable instead of `$CARGO` / `cargo`.
@@ -152,18 +171,52 @@ impl Runner {
 
     /// Compiles (but does not run) the tests of the crates in `impact`, so a
     /// later Test step only has to execute them. Used by the daemon after a
-    /// change. Errors and diagnostics are ignored: the next real verify
-    /// reports them.
+    /// change.
     ///
-    /// Stub until PLAN.md T5.1 implements it: currently a no-op.
+    /// Runs `cargo nextest run --no-run` or `cargo test --no-run` (matching
+    /// the nextest configuration) with exactly the package and build
+    /// arguments of the Test step, so the artifacts are reused. Compiler
+    /// errors and diagnostics are discarded: the next real verify reports
+    /// them. Only a missing `cargo-nextest` with `nextest = "always"` or a
+    /// failure to spawn cargo is an error.
     pub async fn prebuild_tests(
         &self,
         root: &Path,
         impact: &ImpactSet,
         build: &BuildOptions,
     ) -> Result<(), RunnerError> {
-        let _ = (root, impact, build);
+        if impact.is_empty() {
+            return Ok(());
+        }
+        if !root.is_dir() {
+            return Err(RunnerError::InvalidRoot(root.to_path_buf()));
+        }
+        let use_nextest = self.use_nextest(root).await?;
+        let mut args: Vec<String> = if use_nextest {
+            vec!["nextest".into(), "run".into()]
+        } else {
+            vec!["test".into()]
+        };
+        args.extend(compile_package_args(impact));
+        args.push("--no-run".into());
+        args.extend(build.cargo_args());
+        let out = self.run_cargo(root, &args, &[]).await?;
+        tracing::debug!(success = out.success, "prebuilt tests");
         Ok(())
+    }
+
+    /// Whether the Test step uses nextest, per the configuration.
+    async fn use_nextest(&self, root: &Path) -> Result<bool, RunnerError> {
+        Ok(match self.config.nextest {
+            NextestMode::Never => false,
+            NextestMode::Always => {
+                if !self.nextest_installed(root).await {
+                    return Err(RunnerError::NextestMissing);
+                }
+                true
+            }
+            NextestMode::Auto => self.nextest_installed(root).await,
+        })
     }
 
     fn cargo_bin(&self) -> OsString {
@@ -236,7 +289,7 @@ impl Runner {
         } else {
             let (fmt, compile) = tokio::join!(
                 self.run_fmt(root, impact, &index),
-                self.run_compile_ladder(up_to, root, impact, &index, &build_args)
+                self.run_compile_ladder(up_to, root, impact, &index, build)
             );
             (fmt, Some(compile))
         };
@@ -289,14 +342,18 @@ impl Runner {
         root: &Path,
         impact: &ImpactSet,
         index: &CrateIndex,
-        build_args: &[String],
+        build: &BuildOptions,
     ) -> Result<(Vec<StepReport>, Vec<Diagnostic>, Option<Step>), RunnerError> {
         let started = Instant::now();
+        let build_args = build.cargo_args();
         let use_clippy = up_to >= Step::Clippy;
         let mut args = vec![if use_clippy { "clippy" } else { "check" }.to_string()];
         args.extend(compile_package_args(impact));
-        args.extend(["--all-targets".into(), "--message-format=json".into()]);
-        args.extend(build_args.iter().cloned());
+        args.extend(
+            targets::compile_target_args(self.cargo_bin(), root, impact, build.targets).await,
+        );
+        args.push("--message-format=json".into());
+        args.extend(build_args);
         let out = self.run_cargo(root, &args, &[]).await?;
         let duration_ms = millis(started.elapsed());
 
@@ -371,17 +428,64 @@ impl Runner {
         index: &CrateIndex,
         build_args: &[String],
     ) -> Result<StepOutput, RunnerError> {
-        let use_nextest = match self.config.nextest {
-            NextestMode::Never => false,
-            NextestMode::Always => {
-                if !self.nextest_installed(root).await {
-                    return Err(RunnerError::NextestMissing);
-                }
-                true
-            }
-            NextestMode::Auto => self.nextest_installed(root).await,
-        };
+        let use_nextest = self.use_nextest(root).await?;
+        // Crates whose remembered failures this run replaces.
+        let scope: Option<HashSet<String>> =
+            (!impact.full_rebuild).then(|| impact.affected().into_iter().map(|c| c.name).collect());
+        let in_scope = |r: &failures::Recorded| scope.as_ref().is_none_or(|s| s.contains(&r.krate));
 
+        let previous: Vec<failures::Recorded> = if self.failing_first {
+            failures::load(root).into_iter().filter(in_scope).collect()
+        } else {
+            Vec::new()
+        };
+        let (fast, unrunnable): (Vec<_>, Vec<_>) = previous
+            .into_iter()
+            .partition(|r| failures::is_plain_name(&r.name));
+
+        if !fast.is_empty() {
+            let names: Vec<&str> = fast.iter().map(|r| r.name.as_str()).collect();
+            let (mut output, finished) = self
+                .exec_tests(root, impact, index, build_args, use_nextest, Some(&names))
+                .await?;
+            if !output.passed {
+                if finished && !output.test_failures.is_empty() {
+                    let mut kept = failures::record(&output.test_failures);
+                    kept.extend(unrunnable);
+                    failures::save(root, scope.as_ref(), kept);
+                    output
+                        .diagnostics
+                        .push(not_run_note(output.test_failures.len()));
+                }
+                return Ok(output);
+            }
+        }
+
+        let (output, finished) = self
+            .exec_tests(root, impact, index, build_args, use_nextest, None)
+            .await?;
+        if finished {
+            failures::save(
+                root,
+                scope.as_ref(),
+                failures::record(&output.test_failures),
+            );
+        }
+        Ok(output)
+    }
+
+    /// Runs the tests, all of them or only those named in `only` (exact
+    /// names). The flag says whether the tests really ran (as opposed to a
+    /// build failure or crash), i.e. whether the failure list is meaningful.
+    async fn exec_tests(
+        &self,
+        root: &Path,
+        impact: &ImpactSet,
+        index: &CrateIndex,
+        build_args: &[String],
+        use_nextest: bool,
+        only: Option<&[&str]>,
+    ) -> Result<(StepOutput, bool), RunnerError> {
         let mut args: Vec<String> = if use_nextest {
             vec!["nextest".into(), "run".into()]
         } else {
@@ -390,6 +494,20 @@ impl Runner {
         args.extend(compile_package_args(impact));
         args.push("--no-fail-fast".into());
         args.extend(build_args.iter().cloned());
+        if let Some(names) = only {
+            if use_nextest {
+                let filter = names
+                    .iter()
+                    .map(|n| format!("test(={n})"))
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                args.extend(["-E".into(), filter]);
+            } else {
+                args.push("--".into());
+                args.push("--exact".into());
+                args.extend(names.iter().map(|n| (*n).to_string()));
+            }
+        }
         let out = self
             .run_cargo(root, &args, &[("RUST_BACKTRACE", "0")])
             .await?;
@@ -402,6 +520,7 @@ impl Runner {
         let mut diagnostics = Vec::new();
         // nextest exits with 4 when there is simply nothing to run.
         let nothing_to_run = use_nextest && out.code == Some(4);
+        let finished = out.success || nothing_to_run || !test_failures.is_empty();
         let passed = if out.success || nothing_to_run {
             true
         } else {
@@ -411,11 +530,35 @@ impl Runner {
             }
             false
         };
-        Ok(StepOutput {
-            diagnostics,
-            test_failures,
-            passed,
-        })
+        Ok((
+            StepOutput {
+                diagnostics,
+                test_failures,
+                passed,
+            },
+            finished,
+        ))
+    }
+}
+
+/// Note added to the report when only the previously failing tests ran.
+fn not_run_note(failed: usize) -> Diagnostic {
+    Diagnostic {
+        severity: Severity::Note,
+        code: None,
+        message: format!(
+            "Fail-fast: only the {failed} test(s) that failed in the previous run were executed \
+             and still fail; the rest of the test suite was not run. Fix them and verify again \
+             to run the full suite."
+        ),
+        file: None,
+        line: None,
+        column: None,
+        snippet: None,
+        label: None,
+        suggestion: None,
+        crate_id: None,
+        step: Step::Test,
     }
 }
 
