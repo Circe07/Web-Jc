@@ -26,7 +26,8 @@ use orq_cache::RedbCache;
 use orq_compress::LlmCompressor;
 use orq_core::ipc::{self, DaemonRequest, DaemonResponse, DaemonStatus};
 use orq_core::{
-    Config, CoreError, ImpactAnalyzer, Pipeline, ResultCache, Step, StepRunner, VerifyRequest,
+    CompactReport, Config, CoreError, ImpactAnalyzer, Pipeline, ResultCache, Step, StepRunner,
+    VerifyRequest,
 };
 use orq_impact::CargoImpactAnalyzer;
 use orq_runner::Runner;
@@ -80,6 +81,8 @@ struct Shared {
     warming: watch::Sender<bool>,
     /// Set when a change arrived; consumed by the warm-up worker.
     pending: AtomicBool,
+    /// Bumped on every relevant change; lets a running prebuild notice newer work.
+    change_gen: watch::Sender<u64>,
     wake_warmup: Notify,
     /// Wakes the main loop to reset the idle timer.
     activity: Notify,
@@ -130,6 +133,7 @@ pub(crate) async fn serve(root: &Path, options: DaemonOptions) -> Result<(), Cor
         build: config.build.clone(),
     };
     let (warming, _) = watch::channel(false);
+    let (change_gen, _) = watch::channel(0_u64);
     let shared = Arc::new(Shared {
         root: root.clone(),
         config,
@@ -137,6 +141,7 @@ pub(crate) async fn serve(root: &Path, options: DaemonOptions) -> Result<(), Cor
         cargo: Mutex::new(()),
         warming,
         pending: AtomicBool::new(false),
+        change_gen,
         wake_warmup: Notify::new(),
         activity: Notify::new(),
         stop: Notify::new(),
@@ -253,12 +258,19 @@ fn on_changes(shared: &Arc<Shared>, paths: &[PathBuf]) {
     }
     if relevant {
         shared.pending.store(true, Ordering::SeqCst);
+        shared.change_gen.send_modify(|g| *g += 1);
         shared.warming.send_replace(true);
         shared.wake_warmup.notify_one();
     }
 }
 
-/// Runs one background `cargo check` per burst of changes.
+/// Step the warm-up runs: the configured `up_to` capped at `Clippy`, so the
+/// background cargo invocation (and its artifacts) match a real verify.
+fn warmup_step(config: &Config) -> Step {
+    config.up_to.min(Step::Clippy)
+}
+
+/// Runs one background warm-up per burst of changes.
 async fn warmup_worker(shared: Arc<Shared>) {
     loop {
         shared.wake_warmup.notified().await;
@@ -272,8 +284,16 @@ async fn warmup_worker(shared: Arc<Shared>) {
     }
 }
 
+/// One warm-up: the compile step at [`warmup_step`] (result cached under that
+/// step's key), then, when `up_to == Test`, `Runner::prebuild_tests`.
+///
+/// The prebuild is abandoned (its cargo is killed on drop) as soon as a newer
+/// change arrives, so a long prebuild cannot starve the next round. The
+/// duration is appended to the stats as `source = "daemon-warmup"` with a
+/// minimal [`CompactReport`] (`estimated_tokens = 0`, empty `text`/`json`).
 async fn warm_up(shared: &Arc<Shared>) -> Result<(), CoreError> {
     let _cargo = shared.cargo.lock().await;
+    let started = Instant::now();
     let root = shared.root.clone();
     let detector = Arc::clone(shared);
     let impact = tokio::task::spawn_blocking(move || {
@@ -285,13 +305,16 @@ async fn warm_up(shared: &Arc<Shared>) -> Result<(), CoreError> {
     if impact.is_empty() {
         return Ok(());
     }
-    let result = shared
+    let step = warmup_step(&shared.config);
+    let build = &shared.pipeline.build;
+    tracing::info!("warm-up: compiling up to {step:?}");
+    let mut result = shared
         .pipeline
         .runner
-        .run(&shared.root, &impact, Step::Check, &shared.pipeline.build)
+        .run(&shared.root, &impact, step, build)
         .await?;
     if let Some(cache) = &shared.pipeline.cache {
-        match cache.key(&shared.root, &impact, Step::Check, &shared.pipeline.build) {
+        match cache.key(&shared.root, &impact, step, build) {
             Ok(key) => {
                 if let Err(e) = cache.put(&key, &result) {
                     tracing::warn!("warm-up cache store failed: {e}");
@@ -299,6 +322,33 @@ async fn warm_up(shared: &Arc<Shared>) -> Result<(), CoreError> {
             }
             Err(e) => tracing::warn!("warm-up cache key failed: {e}"),
         }
+    }
+    if shared.config.up_to == Step::Test && result.outcome.is_pass() {
+        let mut changes = shared.change_gen.subscribe();
+        changes.mark_unchanged();
+        tracing::info!("warm-up: prebuilding test binaries");
+        tokio::select! {
+            built = shared.pipeline.runner.prebuild_tests(&shared.root, &impact, build) => {
+                if let Err(e) = built {
+                    tracing::warn!("warm-up prebuild failed: {e}");
+                }
+            }
+            _ = changes.changed() => {
+                tracing::info!("warm-up: new change arrived, abandoning prebuild");
+            }
+        }
+    }
+    result.total_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    tracing::info!("warm-up finished in {} ms", result.total_ms);
+    let report = CompactReport {
+        text: String::new(),
+        json: serde_json::Value::Null,
+        estimated_tokens: 0,
+        truncated: false,
+    };
+    let record = orq_core::stats::StatsRecord::new(&result, &report, step, true, "daemon-warmup");
+    if let Err(e) = orq_core::stats::append(&shared.root, &record) {
+        tracing::warn!("warm-up stats failed: {e}");
     }
     Ok(())
 }
