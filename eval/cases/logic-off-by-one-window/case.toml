@@ -1,0 +1,13 @@
+id = "logic-off-by-one-window"
+category = "logic-bug"
+difficulty = "medium"
+description = "A test fails. Fix `max_window_sum` so it considers every window of the given size (do not change the tests)."
+up_to = "test"
+expected_fail_step = "test"
+
+[[facts]]
+test = "tests::best_window_at_the_end"
+
+[[facts]]
+file = "src/lib.rs"
+line = 25

@@ -1,0 +1,17 @@
+id = "workspace-api-change"
+category = "workspace"
+difficulty = "hard"
+description = "The workspace does not compile. The `base` crate intentionally changed `parse_level` to report why parsing failed; adapt the code that uses it. Do not change `base`."
+up_to = "test"
+expected_fail_step = "check"
+
+[[facts]]
+code = "E0308"
+file = "crates/app/src/lib.rs"
+line = 6
+label = "expected `Result"
+
+[[facts]]
+code = "E0308"
+file = "crates/app/src/lib.rs"
+line = 13

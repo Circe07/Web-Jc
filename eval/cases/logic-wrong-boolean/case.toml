@@ -1,0 +1,12 @@
+id = "logic-wrong-boolean"
+category = "logic-bug"
+difficulty = "easy"
+description = "Some tests fail. Fix `is_leap_year` so it follows the Gregorian calendar rules (do not change the tests)."
+up_to = "test"
+expected_fail_step = "test"
+
+[[facts]]
+test = "tests::regular_leap_year"
+
+[[facts]]
+test = "tests::divisible_by_400_is_leap"
