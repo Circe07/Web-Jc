@@ -13,7 +13,8 @@ All notable changes to this project are documented here. The format follows
     run in CI with `--min-recall 0.9`;
   - an agent harness (`eval/agent/`, manual `eval.yml` workflow) that
     measures turns, tokens and success rate of a model fixing each case
-    with orq's report versus raw cargo output.
+    with orq's report versus raw cargo output. It works with Claude or with
+    Gemini's free tier (`--provider gemini`, `GEMINI_API_KEY`).
 - `deny_warnings` in `orq.toml`: clippy runs with `-D warnings`.
 
 ### Fixed

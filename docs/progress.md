@@ -291,8 +291,9 @@ never saw the lint (recall 0.955, fail step 95%). Changes:
 - `orq-eval` loads each case's `orq.toml`, as real use does.
 
 Open items:
-- The agent run against the real API is still pending. It needs the
-  `ANTHROPIC_API_KEY` repository secret, and is started by hand from the
-  `eval` workflow. Estimated cost for 20 cases × 2 modes: ~$3 with Opus,
-  ~$1.40 with Sonnet, ~$0.07 with Haiku.
+- The agent run against a real model is still pending. At the user's request,
+  the harness also supports Gemini's free tier: `--provider gemini`, the
+  `GEMINI_API_KEY` secret and the default model `gemini-flash-lite-latest`.
+  It respects the per-minute limit and stops cleanly when the daily quota is
+  used up. The run is started by hand from the `eval` workflow.
 - `StatsRecord.raw_tokens`, and named pipes on Windows (carried over).

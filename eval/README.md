@@ -8,10 +8,11 @@ output does, with fewer tokens? This directory answers that in two ways:
   the size in tokens and the *fact recall*: does the report still contain
   what is needed to fix the bug (error code, file:line, primary label,
   failing test name)? It needs no API key and runs in CI.
-- **With a real agent** (`eval/agent/agent_eval.py`): Claude gets the broken
+- **With a real agent** (`eval/agent/agent_eval.py`): a model gets the broken
   project and the feedback (raw cargo output, or orq's report), returns a
   patch, the harness applies it and verifies again, for up to K turns. It
-  measures the success rate, the number of turns and the tokens. It needs an
+  measures the success rate, the number of turns and the tokens. It needs a
+  `GEMINI_API_KEY` (free tier, `--provider gemini`) or an
   `ANTHROPIC_API_KEY`. `--mock` runs the whole loop without the API, for
   testing.
 

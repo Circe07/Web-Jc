@@ -101,5 +101,49 @@ class MockRunTests(unittest.TestCase):
                 self.assertLess(by["orq"]["turns"], by["raw"]["turns"])
 
 
+class GeminiTests(unittest.TestCase):
+    def test_request_maps_roles(self):
+        body = ae.gemini_request("m", "sys", [
+            {"role": "user", "content": "a"},
+            {"role": "assistant", "content": "b"}], 100)
+        self.assertEqual(body["systemInstruction"]["parts"][0]["text"], "sys")
+        self.assertEqual([c["role"] for c in body["contents"]], ["user", "model"])
+        self.assertEqual(body["generationConfig"]["maxOutputTokens"], 100)
+
+    def test_response_skips_thoughts_and_counts_them(self):
+        resp = ae.gemini_response({
+            "candidates": [{"finishReason": "STOP", "content": {"parts": [
+                {"text": "thinking...", "thought": True}, {"text": "<file"},
+                {"text": ' path="x.rs">y</file>'}]}}],
+            "usageMetadata": {"promptTokenCount": 50, "candidatesTokenCount": 7,
+                              "thoughtsTokenCount": 3, "cachedContentTokenCount": 10}})
+        self.assertEqual(ae.response_text(resp), '<file path="x.rs">y</file>')
+        self.assertEqual(resp.stop_reason, "end_turn")
+        self.assertEqual((resp.usage.input_tokens, resp.usage.output_tokens,
+                          resp.usage.cache_read_input_tokens), (40, 10, 10))
+
+    def test_response_stop_reasons(self):
+        cut = ae.gemini_response({"candidates": [{"finishReason": "MAX_TOKENS",
+                                                  "content": {"parts": []}}]})
+        self.assertEqual(cut.stop_reason, "max_tokens")
+        blocked = ae.gemini_response({"promptFeedback": {"blockReason": "SAFETY"}})
+        self.assertEqual(blocked.stop_reason, "refusal")
+        self.assertEqual(blocked.stop_details.category, "SAFETY")
+
+    def test_provider_auto(self):
+        self.assertEqual(ae.provider_for("gemini-flash-lite-latest", "auto"), "gemini")
+        self.assertEqual(ae.provider_for("claude-haiku-5-5", "auto"), "anthropic")
+        self.assertEqual(ae.provider_for("x", "gemini"), "gemini")
+
+    def test_missing_key_is_reported(self):
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("GEMINI_API_KEY", "GOOGLE_API_KEY")}
+        p = subprocess.run([sys.executable, str(HERE / "agent_eval.py"), "--provider", "gemini",
+                            "--modes", "raw", "--cases", str(ROOT / "eval/cases")],
+                           env=env, capture_output=True, text=True)
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("GEMINI_API_KEY", p.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

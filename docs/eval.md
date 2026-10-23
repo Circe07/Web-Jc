@@ -48,7 +48,11 @@ pip install -r eval/agent/requirements.txt
 # no API, exercises the whole loop (answers on turn 1 for orq, turn 2 for raw)
 python3 eval/agent/agent_eval.py --mock --orq target/release/orq
 
-# cheap smoke run against the real API
+# free: Gemini with an AI Studio key (https://aistudio.google.com/apikey)
+export GEMINI_API_KEY=...
+python3 eval/agent/agent_eval.py --orq target/release/orq --provider gemini
+
+# cheap smoke run against the Claude API
 export ANTHROPIC_API_KEY=...
 python3 eval/agent/agent_eval.py --orq target/release/orq \
     --model claude-haiku-5-5 --repeat 1
@@ -59,7 +63,8 @@ python3 eval/agent/agent_eval.py --orq target/release/orq \
 ```
 
 Options: `--cases DIR` (default `eval/cases`), `--case ID...`, `--modes raw,orq`,
-`--max-turns 4`, `--budget 1500` (orq report budget), `--model`, `--effort`
+`--max-turns 4`, `--budget 1500` (orq report budget), `--model`,
+`--provider auto|anthropic|gemini`, `--rpm 8` (Gemini only), `--effort`
 (`low|medium|high|xhigh|max`), `--no-fallbacks`, `--orq PATH`,
 `--out eval/results/agent`, `--mock`, `--repeat N`.
 
@@ -69,14 +74,39 @@ skipped automatically for Haiku (`--no-fallbacks` disables them everywhere).
 Calls retry 408/409/429/5xx up to 5 times inside the SDK; a call that still
 fails is recorded as `error`, not as a failed fix.
 
+### Gemini (free tier)
+
+`--provider gemini` (or any `gemini-*`/`gemma-*` model) calls Gemini's REST
+API with the standard library only, so `pip install` is not needed. The
+default model is `gemini-flash-lite-latest`, Google's alias for the current
+Flash-Lite model. On the free tier it has a much higher daily quota than Flash
+(hundreds of requests a day versus tens). `gemini-flash-latest` is the
+stronger choice when the quota allows.
+
+The free tier limits requests per minute and per day, and the numbers change
+often (check the rate-limit page in AI Studio). So that a run fits:
+- calls are spaced to `--rpm` (default 8);
+- a per-minute 429 or a 5xx is retried with backoff;
+- a per-day 429 stops the run cleanly, and the report notes it.
+
+A full run (22 cases × 2 modes, 1–4 turns each) makes about 60–120 calls.
+Run a subset with `--case` if the daily quota is lower than that. `--effort`
+and the refusal fallbacks are Claude-only and are ignored. Cost is not
+estimated for Gemini (free tier).
+
+Free-tier prompts may be used by Google to improve its products. The corpus
+holds only the toy projects in `eval/cases/`, so nothing private is sent.
+
 Tests of the harness itself (no API): `python3 -m unittest discover -s eval/agent`
 (needs `target/release/orq`, or set `ORQ_BIN`).
 
 ### In CI
 
 `.github/workflows/eval.yml` is `workflow_dispatch` only (never on push or PR).
-Add the repository secret `ANTHROPIC_API_KEY`, then run *Agent eval* from the
-Actions tab and choose model, effort, max turns, repeat and cases. The job fails
+Add the repository secret `GEMINI_API_KEY` (free; the default model is
+`gemini-flash-lite-latest`) or `ANTHROPIC_API_KEY` for Claude models. Then run
+*Agent eval* from the Actions tab and choose model, requests per minute,
+effort, max turns, repeat and cases. The job fails
 early with a clear message if the secret is missing, writes the markdown report
 to the job summary, and uploads `eval/results/agent` as the
 `agent-eval-results` artifact.

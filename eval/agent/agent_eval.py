@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
-"""Agent harness: does orq's compact report help a Claude agent fix Rust errors?
+"""Agent harness: does orq's compact report help an LLM agent fix Rust errors?
 
 For every case, mode (raw cargo output vs. orq report) and repeat, the harness
-copies the broken project to a temp dir, shows Claude the failure, applies the
+copies the broken project to a temp dir, shows the model the failure, applies the
 files it returns, and re-verifies, for up to --max-turns turns.
 
 Success is always judged by the case's own cargo ladder (same commands as
 eval/validate.sh), never by the feedback mode.
 
-Needs ANTHROPIC_API_KEY unless --mock is given. Stdlib + `anthropic` only.
+Providers:
+- anthropic (default for `claude-*` models): needs ANTHROPIC_API_KEY and the
+  `anthropic` package.
+- gemini (default for `gemini-*` models): needs GEMINI_API_KEY; plain REST
+  through the standard library, so it works with a free AI Studio key.
+--mock needs neither.
 """
 from __future__ import annotations
 
@@ -22,6 +27,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -36,6 +43,10 @@ except ImportError:  # pragma: no cover
     tomllib = None
 
 DEFAULT_MODEL = "claude-opus-5-5"
+# Google's alias for the current Flash-Lite model: on the free tier it has a
+# much higher daily quota than Flash, and the alias survives model renames.
+DEFAULT_GEMINI_MODEL = "gemini-flash-lite-latest"
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta"
 HAIKU = "claude-haiku-5-5"
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 MAX_TOKENS = 16000
@@ -348,12 +359,128 @@ class ModelCallError(Exception):
     """The API call failed for good (after the SDK's own retries)."""
 
 
+class QuotaExhausted(ModelCallError):
+    """The provider's daily quota is used up: every further call would fail."""
+
+
+def gemini_request(model: str, system: str, messages: list[dict], max_tokens: int) -> dict:
+    """Request body for Gemini's `generateContent` (assistant turns are `model`)."""
+    return {
+        "systemInstruction": {"parts": [{"text": system}]},
+        "contents": [
+            {"role": "model" if m["role"] == "assistant" else "user",
+             "parts": [{"text": m["content"]}]}
+            for m in messages
+        ],
+        "generationConfig": {"maxOutputTokens": max_tokens},
+    }
+
+
+# Gemini finish reasons mapped to the Anthropic stop reasons run_one checks.
+_GEMINI_STOP = {"STOP": "end_turn", "MAX_TOKENS": "max_tokens"}
+_GEMINI_REFUSAL = {"SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII", "RECITATION"}
+
+
+def gemini_response(data: dict):
+    """Turns a `generateContent` reply into the shape run_one reads."""
+    cands = data.get("candidates") or []
+    feedback = data.get("promptFeedback") or {}
+    if not cands:
+        reason = feedback.get("blockReason", "no candidates")
+        return SimpleNamespace(content=[], stop_reason="refusal",
+                               stop_details=SimpleNamespace(category=reason),
+                               usage=_gemini_usage(data))
+    cand = cands[0]
+    finish = cand.get("finishReason", "STOP")
+    parts = (cand.get("content") or {}).get("parts") or []
+    # Skip thought summaries; only the answer counts.
+    text = "".join(p.get("text", "") for p in parts if not p.get("thought"))
+    if finish in _GEMINI_REFUSAL:
+        stop, details = "refusal", SimpleNamespace(category=finish)
+    else:
+        stop, details = _GEMINI_STOP.get(finish, finish.lower()), None
+    return SimpleNamespace(content=[SimpleNamespace(type="text", text=text)],
+                           stop_reason=stop, stop_details=details,
+                           usage=_gemini_usage(data))
+
+
+def _gemini_usage(data: dict):
+    u = data.get("usageMetadata") or {}
+    cached = u.get("cachedContentTokenCount", 0) or 0
+    return SimpleNamespace(
+        input_tokens=(u.get("promptTokenCount", 0) or 0) - cached,
+        # Thinking tokens are billed (and rate-limited) as output.
+        output_tokens=(u.get("candidatesTokenCount", 0) or 0)
+        + (u.get("thoughtsTokenCount", 0) or 0),
+        cache_read_input_tokens=cached,
+        cache_creation_input_tokens=0)
+
+
+class GeminiClient:
+    """Minimal Gemini REST client with the `.beta.messages.create` surface.
+
+    Free-tier keys are limited per minute and per day: calls are spaced by
+    `60 / rpm` seconds, a per-minute 429 is retried with backoff, and a
+    per-day 429 raises QuotaExhausted so the run stops instead of failing
+    every remaining case.
+    """
+
+    def __init__(self, api_key: str, rpm: float, retries: int = 6):
+        self.api_key = api_key
+        self.interval = 60.0 / rpm if rpm > 0 else 0.0
+        self.retries = retries
+        self.last_call = 0.0
+        self.beta = SimpleNamespace(messages=SimpleNamespace(create=self._create))
+
+    def _create(self, *, model, max_tokens, system, messages, **_ignored):
+        system_text = "".join(b["text"] for b in system)
+        body = json.dumps(gemini_request(model, system_text, messages, max_tokens)).encode()
+        url = f"{GEMINI_URL}/models/{model}:generateContent"
+        delay = 10.0
+        for attempt in range(self.retries + 1):
+            wait = self.last_call + self.interval - time.monotonic()
+            if wait > 0:
+                time.sleep(wait)
+            self.last_call = time.monotonic()
+            req = urllib.request.Request(url, data=body, method="POST", headers={
+                "Content-Type": "application/json", "x-goog-api-key": self.api_key})
+            try:
+                with urllib.request.urlopen(req, timeout=300) as r:
+                    return gemini_response(json.loads(r.read()))
+            except urllib.error.HTTPError as e:
+                detail = e.read().decode("utf-8", "replace")[:2000]
+                if e.code == 429 and "PerDay" in detail:
+                    raise QuotaExhausted(f"Gemini daily quota exhausted: {detail[:300]}") from e
+                if e.code in (429, 500, 503) and attempt < self.retries:
+                    time.sleep(delay)
+                    delay = min(delay * 2, 120.0)
+                    continue
+                raise ModelCallError(f"Gemini HTTP {e.code}: {detail[:500]}") from e
+            except (urllib.error.URLError, TimeoutError) as e:
+                if attempt < self.retries:
+                    time.sleep(delay)
+                    delay = min(delay * 2, 120.0)
+                    continue
+                raise ModelCallError(f"Gemini connection error: {e}") from e
+        raise ModelCallError("Gemini: retries exhausted")  # pragma: no cover
+
+
+def provider_for(model: str, provider: str) -> str:
+    if provider != "auto":
+        return provider
+    return "gemini" if model.startswith(("gemini", "gemma")) else "anthropic"
+
+
 def use_fallbacks(model: str, no_fallbacks: bool) -> bool:
     return not no_fallbacks and model != HAIKU
 
 
 def call_model(client, model: str, effort: str, messages: list[dict],
                fallbacks: bool, real: bool):
+    if isinstance(client, GeminiClient):
+        return client.beta.messages.create(model=model, max_tokens=MAX_TOKENS,
+                                           system=[{"type": "text", "text": SYSTEM}],
+                                           messages=messages)
     # No temperature/top_p/top_k, no thinking config, no prefill: they 400.
     kwargs = dict(
         model=model,
@@ -418,7 +545,8 @@ def run_one(case: dict, mode: str, repeat: int, args, client, run_id: str) -> di
         rec["feedback_tokens"].append(est_tokens(fb))
         messages = [{"role": "user",
                      "content": build_user_prompt(case["description"], project, fb)}]
-        fallbacks = use_fallbacks(args.model, args.no_fallbacks)
+        fallbacks = (args.provider == "anthropic"
+                     and use_fallbacks(args.model, args.no_fallbacks))
 
         for _turn in range(args.max_turns):
             resp = call_model(client, args.model, args.effort, messages, fallbacks,
@@ -459,6 +587,8 @@ def run_one(case: dict, mode: str, repeat: int, args, client, run_id: str) -> di
                              f"{note}Verification output after applying your files:\n{fb}"})
         if rec["outcome"] == "fail" and rec["stop_reasons"] and rec["stop_reasons"][-1] == "max_tokens":
             rec["error"] = "last reply hit max_tokens"
+    except QuotaExhausted:
+        raise
     except ModelCallError as e:
         rec["outcome"], rec["error"] = "error", str(e)
     except HarnessError as e:
@@ -482,7 +612,12 @@ def parse_args(argv=None):
     ap.add_argument("--modes", default="raw,orq", help="comma list of raw,orq")
     ap.add_argument("--max-turns", type=int, default=4)
     ap.add_argument("--budget", type=int, default=1500, help="orq report token budget")
-    ap.add_argument("--model", default=DEFAULT_MODEL)
+    ap.add_argument("--model", default=None,
+                    help=f"default: {DEFAULT_MODEL}, or {DEFAULT_GEMINI_MODEL} with --provider gemini")
+    ap.add_argument("--provider", default="auto", choices=["auto", "anthropic", "gemini"],
+                    help="auto: gemini for gemini-*/gemma-* models, else anthropic")
+    ap.add_argument("--rpm", type=float, default=8.0,
+                    help="Gemini only: max requests per minute (free tier: ~5-15)")
     ap.add_argument("--effort", default="medium", choices=["low", "medium", "high", "xhigh", "max"])
     ap.add_argument("--no-fallbacks", action="store_true",
                     help="do not request server-side refusal fallbacks")
@@ -495,6 +630,9 @@ def parse_args(argv=None):
 
 def main(argv=None) -> int:
     args = parse_args(argv)
+    if args.model is None:
+        args.model = DEFAULT_GEMINI_MODEL if args.provider == "gemini" else DEFAULT_MODEL
+    args.provider = provider_for(args.model, args.provider)
     modes = [m.strip() for m in args.modes.split(",") if m.strip()]
     if not modes or any(m not in ("raw", "orq") for m in modes):
         print("error: --modes must be a comma list of raw,orq", file=sys.stderr)
@@ -512,7 +650,13 @@ def main(argv=None) -> int:
         cases.append(load_case(cases_dir / cid))
 
     client = None
-    if not args.mock:
+    if not args.mock and args.provider == "gemini":
+        key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        if not key:
+            print("error: GEMINI_API_KEY is not set (use --mock to run offline)", file=sys.stderr)
+            return 2
+        client = GeminiClient(key, args.rpm)
+    elif not args.mock:
         if anthropic is None:
             print("error: `pip install anthropic` (see eval/agent/requirements.txt)", file=sys.stderr)
             return 2
@@ -528,20 +672,30 @@ def main(argv=None) -> int:
     jsonl = out / f"{run_id}.jsonl"
 
     records = []
+    stopped = None
     with jsonl.open("w", encoding="utf-8") as f:
         for case in cases:
             for mode in modes:
                 for rep in range(1, args.repeat + 1):
-                    rec = run_one(case, mode, rep, args, client, run_id)
+                    if stopped:
+                        break
+                    try:
+                        rec = run_one(case, mode, rep, args, client, run_id)
+                    except QuotaExhausted as e:
+                        stopped = str(e)
+                        print(f"stopping: {e}", file=sys.stderr)
+                        break
                     records.append(rec)
                     f.write(json.dumps(rec) + "\n")
                     f.flush()
                     print(f"{case['id']:28} {mode:4} #{rep} {rec['outcome']:8} "
                           f"turns={rec['turns']} tokens={rec['input_tokens'] + rec['output_tokens']}",
                           file=sys.stderr)
-    desc = (f"max_turns={args.max_turns}, budget={args.budget}, effort={args.effort}, "
-            f"repeat={args.repeat}, mock={args.mock}")
+    desc = (f"provider={args.provider}, max_turns={args.max_turns}, budget={args.budget}, "
+            f"effort={args.effort}, repeat={args.repeat}, mock={args.mock}")
     md = render_markdown(run_id, args.model, desc, records)
+    if stopped:
+        md += f"\n**Run stopped early:** {stopped}\n"
     (out / f"{run_id}.md").write_text(md, encoding="utf-8")
     print(md)
     print(f"wrote {jsonl} and {out / (run_id + '.md')}", file=sys.stderr)
