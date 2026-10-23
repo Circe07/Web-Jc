@@ -5,7 +5,7 @@
 #   1. Set `version` below to X.Y.Z.
 #   2. For each target, download the matching `.sha256` asset from the GitHub
 #      release (orq-X.Y.Z-<target>.tar.gz.sha256). The first field of that file
-#      is the hash; paste it in place of the REPLACE_WITH_SHA256_* value.
+#      is the hash; replace the matching `sha256` value below with it.
 #      Example:
 #        curl -sL https://github.com/circe07/orq/releases/download/vX.Y.Z/orq-X.Y.Z-aarch64-apple-darwin.tar.gz.sha256
 #
@@ -19,22 +19,22 @@ class Orq < Formula
   on_macos do
     on_arm do
       url "https://github.com/circe07/orq/releases/download/v#{version}/orq-#{version}-aarch64-apple-darwin.tar.gz"
-      sha256 "REPLACE_WITH_SHA256_AARCH64_APPLE_DARWIN"
+      sha256 "9ef817b406b5077bac5e51b206bd01b708e483d6133e93e05584d469a9c90304"
     end
     on_intel do
       url "https://github.com/circe07/orq/releases/download/v#{version}/orq-#{version}-x86_64-apple-darwin.tar.gz"
-      sha256 "REPLACE_WITH_SHA256_X86_64_APPLE_DARWIN"
+      sha256 "eaceaa58aa0401435e723b85b39859ebf7873722155d428f20bdda78602413f6"
     end
   end
 
   on_linux do
     on_arm do
       url "https://github.com/circe07/orq/releases/download/v#{version}/orq-#{version}-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "REPLACE_WITH_SHA256_AARCH64_UNKNOWN_LINUX_GNU"
+      sha256 "c0771c473cad5fa11c1415d4d38b4577db44dc971da0e1ef9b428c79dd4af205"
     end
     on_intel do
       url "https://github.com/circe07/orq/releases/download/v#{version}/orq-#{version}-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "REPLACE_WITH_SHA256_X86_64_UNKNOWN_LINUX_GNU"
+      sha256 "b83c812fb6b755e9ba88a58059fe4e54a607edf5d172e0368e4b3ad2604d421e"
     end
   end
 
