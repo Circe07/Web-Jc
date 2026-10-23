@@ -1,0 +1,17 @@
+id = "import-cascade-misspelled-trait"
+category = "unresolved-import"
+difficulty = "hard"
+description = "The crate does not compile and cargo prints many errors. Make it build; fix the cause, not each symptom."
+up_to = "test"
+expected_fail_step = "check"
+
+[[facts]]
+code = "E0432"
+file = "src/report.rs"
+line = 1
+label = "Shpae"
+
+[[facts]]
+code = "E0599"
+file = "src/report.rs"
+line = 5

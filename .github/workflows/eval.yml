@@ -1,0 +1,100 @@
+name: Agent eval
+
+# Manual only: this calls a model API (Gemini's free tier or the paid Claude
+# API). Never on push or PR.
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: Model (gemini-flash-lite-latest, gemini-flash-latest, claude-haiku-5-5, claude-sonnet-5-5, claude-opus-5-5)
+        default: gemini-flash-lite-latest
+        required: true
+      rpm:
+        description: Gemini only, max requests per minute (free tier ~5-15)
+        default: "8"
+        required: true
+      effort:
+        description: Effort (low, medium, high, xhigh, max)
+        default: medium
+        required: true
+      max_turns:
+        description: Max agent turns per run
+        default: "4"
+        required: true
+      repeat:
+        description: Repeats per case and mode
+        default: "1"
+        required: true
+      cases:
+        description: Space-separated case ids (empty = all)
+        default: ""
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  agent-eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Require the API key
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          INPUT_MODEL: ${{ inputs.model }}
+        run: |
+          case "$INPUT_MODEL" in
+            gemini*|gemma*) name=GEMINI_API_KEY; value=$GEMINI_API_KEY ;;
+            *) name=ANTHROPIC_API_KEY; value=$ANTHROPIC_API_KEY ;;
+          esac
+          if [ -z "$value" ]; then
+            echo "::error::The repository secret $name is not set. Add it under Settings > Secrets and variables > Actions, then re-run."
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p orq-cli
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r eval/agent/requirements.txt
+      - name: Run harness
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          INPUT_RPM: ${{ inputs.rpm }}
+          INPUT_MODEL: ${{ inputs.model }}
+          INPUT_EFFORT: ${{ inputs.effort }}
+          INPUT_MAX_TURNS: ${{ inputs.max_turns }}
+          INPUT_REPEAT: ${{ inputs.repeat }}
+          INPUT_CASES: ${{ inputs.cases }}
+        run: |
+          args=(--orq target/release/orq --model "$INPUT_MODEL" --effort "$INPUT_EFFORT"
+                --max-turns "$INPUT_MAX_TURNS" --repeat "$INPUT_REPEAT" --rpm "$INPUT_RPM")
+          if [ -n "$INPUT_CASES" ]; then
+            # shellcheck disable=SC2206
+            ids=($INPUT_CASES)
+            args+=(--case "${ids[@]}")
+          fi
+          python3 eval/agent/agent_eval.py "${args[@]}"
+      - name: Summary
+        if: always()
+        run: |
+          for f in eval/results/agent/*.md; do
+            [ -f "$f" ] && cat "$f" >> "$GITHUB_STEP_SUMMARY"
+          done
+          exit 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: agent-eval-results
+          path: eval/results/agent
+          if-no-files-found: warn

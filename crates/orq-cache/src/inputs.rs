@@ -14,6 +14,8 @@ pub(crate) const GLOBAL_FILES: &[&str] = &[
     "rust-toolchain.toml",
     ".cargo/config",
     ".cargo/config.toml",
+    // Options such as `deny_warnings` change the outcome.
+    "orq.toml",
 ];
 
 /// Environment variables hashed verbatim when set.

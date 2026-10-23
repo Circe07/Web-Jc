@@ -4,6 +4,25 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- Evaluation of the compression quality (`eval/`, `docs/eval.md`):
+  - a corpus of 22 real failure cases with fixes and expected facts;
+  - `orq-eval`, offline metrics (tokens and fact recall per budget),
+    run in CI with `--min-recall 0.9`;
+  - an agent harness (`eval/agent/`, manual `eval.yml` workflow) that
+    measures turns, tokens and success rate of a model fixing each case
+    with orq's report versus raw cargo output. It works with Claude or with
+    Gemini's free tier (`--provider gemini`, `GEMINI_API_KEY`).
+- `deny_warnings` in `orq.toml`: clippy runs with `-D warnings`.
+
+### Fixed
+- A pass with warnings used to hide them. The `PASS` line now carries the
+  warning count, and the warnings are listed below it within the budget.
+- `orq.toml` is part of the cache key, so changing it no longer replays an
+  old result.
+
 ## [0.4.0] - 2026-10-23
 
 ### Added

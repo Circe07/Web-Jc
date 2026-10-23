@@ -831,6 +831,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "orq-eval"
+version = "0.4.0"
+dependencies = [
+ "clap",
+ "orq-cache",
+ "orq-compress",
+ "orq-core",
+ "orq-impact",
+ "orq-runner",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "orq-impact"
 version = "0.4.0"
 dependencies = [

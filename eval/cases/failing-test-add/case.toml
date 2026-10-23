@@ -1,0 +1,9 @@
+id = "failing-test-add"
+category = "logic-bug"
+difficulty = "easy"
+description = "A test fails. Fix the library so the tests pass (do not change the tests)."
+up_to = "test"
+expected_fail_step = "test"
+
+[[facts]]
+test = "tests::adds_small_numbers"

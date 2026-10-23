@@ -1,0 +1,6 @@
+---
+source: crates/orq-compress/tests/compress.rs
+expression: out.text
+---
+PASS check (1 warning) · crates: api · 1.8s (cache: no)
+[W1] clippy::needless_range_loop the loop variable `i` is only used to index `v` — src/lib.rs:4:17

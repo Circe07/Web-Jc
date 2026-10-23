@@ -1,0 +1,9 @@
+id = "logic-page-count-rounding"
+category = "logic-bug"
+difficulty = "easy"
+description = "A test fails. Fix `page_count` so a partially filled last page is counted (do not change the tests)."
+up_to = "test"
+expected_fail_step = "test"
+
+[[facts]]
+test = "tests::partial_last_page"

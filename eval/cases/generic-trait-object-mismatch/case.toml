@@ -1,0 +1,18 @@
+id = "generic-trait-object-mismatch"
+category = "type-mismatch"
+difficulty = "hard"
+description = "The crate does not compile. `best_item` should return a copy of the best-scoring item and `Registry::standard` should hold both scorers."
+up_to = "test"
+expected_fail_step = "check"
+
+[[facts]]
+code = "E0308"
+file = "src/lib.rs"
+line = 35
+label = "expected `Option<T>`"
+
+[[facts]]
+code = "E0308"
+file = "src/lib.rs"
+line = 47
+label = "expected `Box<dyn Scorer>`"

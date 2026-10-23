@@ -1,0 +1,18 @@
+id = "macro-invocation-type"
+category = "macro"
+difficulty = "hard"
+description = "The crate does not compile. Make the `define_settings!` invocation valid so that `Settings::default()` has the documented defaults."
+up_to = "test"
+expected_fail_step = "check"
+
+[[facts]]
+code = "E0308"
+file = "src/lib.rs"
+line = 19
+label = "expected `bool`"
+
+[[facts]]
+code = "E0308"
+file = "src/lib.rs"
+line = 20
+label = "expected `String`"

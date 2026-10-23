@@ -129,6 +129,26 @@ fn snapshot_pass() {
 }
 
 #[test]
+fn pass_lists_warnings() {
+    let mut w = diag(
+        Severity::Warning,
+        Some("clippy::needless_range_loop"),
+        "the loop variable `i` is only used to index `v`",
+        "src/lib.rs",
+        4,
+    );
+    w.step = Step::Clippy;
+    let r = base(Outcome::Pass, vec![w]);
+    let out = LlmCompressor::new(Lang::En).compress(&r, 1500);
+    insta::assert_snapshot!(out.text);
+    assert_eq!(out.json["total"]["warnings"], 1);
+    // Under a tiny budget the header survives and the count stays visible.
+    let tiny = LlmCompressor::new(Lang::En).compress(&r, 20);
+    assert!(tiny.text.starts_with("PASS check"), "{}", tiny.text);
+    assert!(tiny.estimated_tokens <= 20);
+}
+
+#[test]
 fn snapshot_pass_full_rebuild() {
     let mut r = base(Outcome::Pass, vec![]);
     r.impact.full_rebuild = true;

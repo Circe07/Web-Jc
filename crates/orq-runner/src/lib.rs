@@ -354,6 +354,10 @@ impl Runner {
         );
         args.push("--message-format=json".into());
         args.extend(build_args);
+        // Passed to clippy-driver only: RUSTFLAGS would rebuild every dependency.
+        if use_clippy && self.config.deny_warnings {
+            args.extend(["--".into(), "-D".into(), "warnings".into()]);
+        }
         let out = self.run_cargo(root, &args, &[]).await?;
         let duration_ms = millis(started.elapsed());
 

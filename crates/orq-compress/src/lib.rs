@@ -259,6 +259,15 @@ fn candidates(outcome: Outcome, prepared: &Prepared<'_>) -> Vec<Params> {
         for crates_max in [2, 0] {
             out.push(Params { crates_max, ..full });
         }
+        // Warnings go first, then the count in the header.
+        for counts in [true, false] {
+            out.push(Params {
+                crates_max: 0,
+                warnings: false,
+                counts,
+                ..full
+            });
+        }
         return out;
     }
     // Trim snippets.
@@ -337,11 +346,33 @@ fn render(
             } else {
                 steps.join("+")
             };
-            let mut parts = vec![format!("PASS {steps_txt}")];
+            let mut head = format!("PASS {steps_txt}");
+            let hidden_warnings = if p.warnings {
+                0
+            } else {
+                prepared.warnings.len()
+            };
+            if p.counts && !prepared.warnings.is_empty() {
+                head.push_str(&format!(
+                    " ({})",
+                    w.warnings(prepared.warnings.len(), hidden_warnings > 0)
+                ));
+            }
+            let mut parts = vec![head];
             if let Some(c) = &crates_shown {
                 parts.push(c.clone());
             }
             parts.push(format!("{secs} ({})", w.cache(result.cache_hit)));
+            let mut lines = vec![parts.join(" · ")];
+
+            // Warnings don't fail the ladder, but the agent still needs them.
+            let mut warnings_json = Vec::new();
+            if p.warnings {
+                for (i, e) in prepared.warnings.iter().enumerate() {
+                    lines.push(format!("[W{}] {}", i + 1, headline(e, p.width, w)));
+                    warnings_json.push(item_json(json!(format!("W{}", i + 1)), e, p.width));
+                }
+            }
             let json = json!({
                 "outcome": "pass",
                 "steps": steps,
@@ -349,8 +380,11 @@ fn render(
                 "full_rebuild": result.impact.full_rebuild,
                 "duration_ms": result.total_ms,
                 "cache_hit": result.cache_hit,
+                "total": { "warnings": prepared.warnings.len() },
+                "warnings": warnings_json,
+                "hidden": { "warnings": hidden_warnings },
             });
-            (parts.join(" · "), json)
+            (lines.join("\n"), json)
         }
         Outcome::Fail { failed_step } => {
             let shown_errors = prepared.errors.len().min(p.max_errors);

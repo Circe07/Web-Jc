@@ -1,0 +1,9 @@
+[package]
+name = "clippy-needless-range-loop"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+
+[workspace]

@@ -1,0 +1,11 @@
+id = "type-mismatch-question-mark"
+category = "type-mismatch"
+difficulty = "medium"
+description = "The crate does not compile. `parse_settings` should return a `ConfigError` when the input is invalid; make it build and keep the tests passing."
+up_to = "test"
+expected_fail_step = "check"
+
+[[facts]]
+code = "E0277"
+file = "src/lib.rs"
+line = 27
