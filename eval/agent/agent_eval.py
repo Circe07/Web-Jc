@@ -327,6 +327,19 @@ def judge(project: Path, up_to: str, env: dict) -> tuple[bool, str]:
     return True, ""
 
 
+def deny_warnings_like_judge(project: Path) -> None:
+    """Makes orq fail on clippy warnings, as `judge` does (`-D warnings`).
+
+    Without it orq reports PASS with warnings listed while the judge fails
+    the run, so the agent is told it is done and still loses a turn.
+    """
+    cfg = project / "orq.toml"
+    text = cfg.read_text(encoding="utf-8") if cfg.is_file() else ""
+    if not re.search(r"^\s*deny_warnings\s*=", text, re.M):
+        cfg.write_text(text + ("\n" if text and not text.endswith("\n") else "")
+                       + "deny_warnings = true\n", encoding="utf-8")
+
+
 def orq_feedback(orq: str, project: Path, up_to: str, budget: int, env: dict) -> str:
     """orq's compact report for the project (all source files passed as changed)."""
     e = dict(env)
@@ -539,6 +552,22 @@ def response_text(resp) -> str:
 # One run
 # --------------------------------------------------------------------------
 
+def write_transcript(out_dir: Path, rec: dict, messages: list[dict],
+                     last_reply: str | None) -> None:
+    """The run's conversation as Markdown: every prompt, feedback and reply."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    turns = list(messages)
+    # The last reply is not in `messages`: nothing was sent after it.
+    if last_reply is not None and (not turns or turns[-1]["role"] == "user"):
+        turns.append({"role": "assistant", "content": last_reply})
+    parts = [f"# {rec['case']} / {rec['mode']} / repeat {rec['repeat']}: "
+             f"{rec['outcome']} in {rec['turns']} turn(s)", ""]
+    for i, m in enumerate(turns, 1):
+        parts += [f"## {i}. {m['role']}", "", "````text", m["content"], "````", ""]
+    name = f"{rec['case']}-{rec['mode']}-{rec['repeat']}.md"
+    (out_dir / name).write_text("\n".join(parts), encoding="utf-8")
+
+
 def run_one(case: dict, mode: str, repeat: int, args, client, run_id: str) -> dict:
     start = time.monotonic()
     rec = {
@@ -553,11 +582,15 @@ def run_one(case: dict, mode: str, repeat: int, args, client, run_id: str) -> di
         "cost_usd": None, "error": None,
     }
     up_to = case.get("up_to", "test")
+    messages: list[dict] = []
+    last_reply = None
     work = Path(tempfile.mkdtemp(prefix="orq-agent-eval-"))
     try:
         project = work / "project"
         shutil.copytree(case["dir"] / "project", project,
                         ignore=shutil.ignore_patterns("target", "Cargo.lock"))
+        if mode == "orq":
+            deny_warnings_like_judge(project)
         env = cargo_env(work / "target")
         if args.mock:
             client = MockClient(case["dir"] / "fix", 1 if mode == "orq" else 2)
@@ -613,6 +646,7 @@ def run_one(case: dict, mode: str, repeat: int, args, client, run_id: str) -> di
                 rec["error"] = f"refusal (category: {cat})"
                 break
             text = response_text(resp)
+            last_reply = text
             written, rejected = apply_files(project, parse_file_blocks(text))
             passed, raw_out = timed_judge()
             # orq mode checks with orq after every reply, as a real orq
@@ -645,6 +679,8 @@ def run_one(case: dict, mode: str, repeat: int, args, client, run_id: str) -> di
         rec["outcome"], rec["error"] = "error", str(e)
     finally:
         shutil.rmtree(work, ignore_errors=True)
+    if getattr(args, "transcripts", None):
+        write_transcript(Path(args.transcripts) / run_id, rec, messages, last_reply)
     rec["wall_seconds"] = round(time.monotonic() - start, 2)
     for k in ("cargo_seconds", "orq_seconds", "model_seconds", "wait_seconds"):
         rec[k] = round(rec[k], 2)
@@ -675,6 +711,8 @@ def parse_args(argv=None):
                     help="do not request server-side refusal fallbacks")
     ap.add_argument("--orq", default="orq", help="path to the orq binary")
     ap.add_argument("--out", default="eval/results/agent")
+    ap.add_argument("--transcripts", metavar="DIR",
+                    help="write each run's conversation to DIR/<run id>/")
     ap.add_argument("--mock", action="store_true", help="fake client, no network")
     ap.add_argument("--repeat", type=int, default=1)
     return ap.parse_args(argv)

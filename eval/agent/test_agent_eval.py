@@ -51,6 +51,21 @@ class ParseTests(unittest.TestCase):
             self.assertIsNone(ae.safe_target(root, "link/x.rs"))
 
 
+class DenyWarningsTests(unittest.TestCase):
+    def test_adds_or_keeps_setting(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d)
+            ae.deny_warnings_like_judge(p)
+            self.assertEqual((p / "orq.toml").read_text(), "deny_warnings = true\n")
+            (p / "orq.toml").write_text('budget = 800')
+            ae.deny_warnings_like_judge(p)
+            self.assertEqual((p / "orq.toml").read_text(),
+                             "budget = 800\ndeny_warnings = true\n")
+            (p / "orq.toml").write_text("deny_warnings = false\n")
+            ae.deny_warnings_like_judge(p)
+            self.assertEqual((p / "orq.toml").read_text(), "deny_warnings = false\n")
+
+
 class PricingTests(unittest.TestCase):
     def test_opus(self):
         # 1M in * $4 + 1M out * $20 + 1M read * $0.4 + 1M write * $5
