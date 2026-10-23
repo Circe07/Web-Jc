@@ -20,12 +20,32 @@ All notable changes to this project are documented here. The format follows
 - Agent harness: `--transcripts DIR` saves each conversation, and the report
   shows time per run split into model and checker.
 
+### Added (wave 8)
+- `orq verify --fix` (also MCP `fix`, opt-in in the hook): apply
+  machine-applicable fixes first, then report which files changed.
+- Lints of the crates that compile are reported next to the errors of the
+  ones that do not; the signature of the item an error names is shown.
+- The daemon verifies each change in the background and answers a verify
+  for the same tree from that result.
+- The Test step runs only the test targets a change can affect.
+- `orq doctor` warns when rust-analyzer shares `target/` and lists fast
+  build tools; `orq setup` hints wild and sccache.
+- `eval/projects/tasktrack` test project with dev and fix tasks, and
+  `benches/edit_loop.py`.
+
+### Performance
+- The runner calls the toolchain's binaries directly instead of the rustup
+  proxies, and finds cargo-nextest without spawning it.
+
 ### Changed
 - Suggestions now show the source line with the edit applied, its line
   number and rustc's help text, instead of a bare fragment such as
   `: std::cmp::Ord`.
 
 ### Fixed
+- A failed `assert_eq!` showed `left`/`right` clipped before the
+  difference; long pairs now get more room and a window around it.
+- `orq setup` gave the wild linker mold's flag.
 - Agent harness: a relative `--orq` path works; time no longer counts the
   waits for the Gemini rate limit, and each mode is timed with its own
   checker; orq mode denies clippy warnings like the judge, so a warning no

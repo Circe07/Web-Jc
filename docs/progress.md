@@ -376,3 +376,76 @@ Open items:
   slips weigh less.
 - orq lists `file is not formatted` warnings for the agent's own files, which
   the judge ignores (fmt never fails a case). Harmless, but noise.
+
+## Wave 8 — Time and fluidity · F0–F3 done 2026-10-23
+
+Goal: cut the wall-clock time of an agent developing in Rust, not only
+tokens. F1–F3 were built by three parallel subagents in worktrees and
+merged by the lead; the lead ran every measurement on an idle machine.
+
+| Phase | Result |
+| --- | --- |
+| F0 measure | `eval/projects/tasktrack` (4 crates, serde/clap/regex/chrono; cold clippy ~30 s) with 6 tasks: 3 dev (features from tests) and 3 fix. `base` in case.toml; `--target-cache` keeps dependencies built, like a dev machine. `benches/edit_loop.py` times edit → verify with no model. |
+| F1 tools | Installed sccache, cargo-nextest, wild (mold: blocked download). `orq doctor` checks rust-analyzer sharing `target/` and lists fast tools; `orq setup` hints wild (it gave it mold's flag) and sccache. |
+| F2 fewer turns | `orq verify --fix` (CLI, MCP, opt-in hook); clippy lints of the crates that compile next to the errors of those that do not (`--keep-going`, ~0 ms); the signature of the item an error names. |
+| F3 fluidity | The daemon verifies each change in the background and answers a verify for the same tree from that result, or attaches to the run in flight; per-target test selection (an edit to `tests/foo.rs` runs `--test foo`), wired into the runner by the lead. |
+
+Edit → verify on tasktrack, deps built, median of 5 (leaf crate / root crate):
+
+| Config | cargo clippy + test | orq | orq + daemon, asked 3 s later |
+| --- | ---: | ---: | ---: |
+| default | 1.18 / 1.92 s | 1.18 / 2.03 s | **0.01 / 0.01 s** |
+| `debug = "line-tables-only"` | 1.14 / 1.77 s | 1.16 / 1.94 s | **0.01 / 0.01 s** |
+
+- Build tools barely move this project: line-tables −5–9 % per edit,
+  −14 % cold; sccache, wild and nextest within noise; no-incremental +30 %;
+  deps at opt-level 1 cost 45 s cold for nothing.
+- The daemon: 0.01 s asked 3 s after the edit, 0.67/1.38 s after 1 s,
+  1.30/2.16 s right after (worse than no daemon: the watcher's debounce).
+  The Claude Code hook verifies right after each edit, so it gains nothing
+  yet.
+
+Bugs found by the measurements, fixed by the lead:
+1. **orq was 0.2–0.35 s slower than cargo per edit**: every cargo,
+   cargo-clippy, cargo-fmt and rustc call went through a rustup proxy
+   (~35 ms, about ten per verify) and `cargo nextest --version` was spawned
+   on every run. The runner now resolves the toolchain once (`rustup which
+   cargo`) and puts its `bin/` first on PATH; nextest is looked up on PATH.
+   Leaf edit 1.45 → 1.16 s.
+2. **Assert values clipped before the difference.** In the first agent run
+   orq failed `fix-two-logic-bugs` 0/3 (raw 3/3): the `left:`/`right:`
+   lines were clipped to the line width and the difference was past the
+   cut. A pair now gets 4× the width, then a window around the first
+   difference.
+3. Benchmark/harness: a shared target dir with copied mtimes passed a broken
+   project with a previous fix's artifacts (copies now get fresh mtimes);
+   the bench told orq every file had changed; the daemon only reuses
+   speculative results in a git repository (bench copies are now repos;
+   non-git projects still miss: open item); a dropped Gemini connection
+   crashed the run.
+
+Agent results on tasktrack, gemini-flash-lite-latest, 6 tasks × 3 repeats
+per mode, after fix 2:
+
+| Mode | Solved | Mean turns | Mean time | Model | Checker | Mean tokens |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| raw | 18/18 | 1.67 | 16.9 s | 11.0 s | 5.9 s | 17 797 |
+| orq | 18/18 | 1.39 | **10.6 s** | 8.9 s | **1.6 s** | 13 045 |
+
+- 37 % less time per task, 3.7× less checker time, 17 % fewer turns,
+  27 % fewer tokens. Biggest wins on dev tasks (`dev-stats-command`
+  5.4 vs 12.5 s, `dev-query-or` 13.3 vs 26.3 s).
+- gemini-flash-latest spent 131–297 s per call writing 9.6k–13.7k thinking
+  tokens (cargo: ~10 s per task), and its free daily quota ran out after a
+  few calls. With a reasoning model the model dominates; `--effort` now sets
+  Gemini's thinking budget.
+
+Open items:
+- Non-blocking hook: nudge the daemon on each edit and block only at the
+  end of the turn, so a verify is usually ready when asked.
+- Daemon speculation outside git repositories.
+- `Diagnostic.signature` in orq-core (F2 sends signatures as a Help
+  diagnostic with code `orq::signature`).
+- A run with a stronger model (Claude key, or gemini-flash-latest spread
+  over several days).
+

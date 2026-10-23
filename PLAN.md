@@ -438,6 +438,18 @@ Lo que nos dijo la Oleada 7: en los casos de juguete la verificación cuesta ~1 
 
 **Orden:** F0 → F1 (medir cada herramienta) → F2 → F3, volviendo a ejecutar el banco de la F0 tras cada fase.
 
+**Estado (2026-10-23): F0–F3 hechas.** Detalle y cifras en `docs/progress.md` (Wave 8). Resumen:
+- En `tasktrack` con Flash-Lite, orq resuelve las 18 tareas (como raw) con un **37 % menos de tiempo** por tarea (10,6 s frente a 16,9 s), 3,7 veces menos tiempo de verificación y un 17 % menos de intentos.
+- Con el daemon, verificar unos segundos después de editar tarda **0,01 s** (cargo: 1,2–1,9 s).
+- Las herramientas de compilación apenas cambian nada en un proyecto de este tamaño; solo compensa el perfil con menos información de depuración.
+- Arreglados: los saltos por el proxy de rustup (orq iba 0,3 s por detrás de cargo) y los valores de `assert_eq!` recortados antes de la diferencia.
+
+**Siguiente:**
+- Hook que no bloquee: avisar al daemon en cada edición y bloquear solo al final del turno.
+- Especulación del daemon fuera de repositorios git.
+- `Diagnostic.signature` en orq-core.
+- Medir con un modelo más fuerte (clave de Claude, o `gemini-flash-latest` repartido en varios días).
+
 ---
 
 ## 6. Fixtures (`fixtures/`)
