@@ -259,3 +259,40 @@ Open items:
   instead of estimating them. It needs a contract change.
 - Measuring compression quality with real agent tasks (wave 6), and named
   pipes on Windows.
+
+## Wave 6 — Measuring compression quality · closed 2026-10-23
+
+Goal: measure whether orq's compact report keeps what an agent needs to fix
+the code, with real failures instead of hand-picked examples.
+
+| Task | Result |
+| --- | --- |
+| T6.1 corpus | 22 cases in `eval/cases/` (borrow checker, lifetimes, type mismatch, imports, traits, macros, features, workspace API change, clippy, failing tests, panics). Each one has `project/`, `fix/` and the facts the report must keep. `eval/validate.sh` checks that each case fails at the expected step and passes once fixed. |
+| T6.2 offline metrics | `orq-eval` crate: runs every case and records tokens and fact recall for raw cargo output (`raw-step`, `raw-ladder`) and for orq at budgets 200/500/1500. CI job `eval-offline` with `--min-recall 0.9`. |
+| T6.3 agent harness | `eval/agent/agent_eval.py`: a model fixes each case using either orq's report or raw cargo output, and the harness records turns, tokens and success. Mock mode for CI; manual `eval.yml` workflow with the `ANTHROPIC_API_KEY` secret. |
+
+Offline results (22 cases):
+
+| Mode | Mean tokens | vs raw-step | Mean recall | Fail step right |
+| --- | ---: | ---: | ---: | ---: |
+| raw-step (failing cargo command) | 556 | 100% | 1.000 | — |
+| raw-ladder (`cargo build && cargo test`) | 480 | 86% | 0.955 | — |
+| orq@200 | 95 | 17% | 1.000 | 100% |
+| orq@1500 | 100 | 18% | 1.000 | 100% |
+
+Bug found by the evaluation, fixed by the lead: **a pass hid the clippy
+warnings.** In `clippy-needless-range-loop`, orq said `PASS` and the agent
+never saw the lint (recall 0.955, fail step 95%). Changes:
+- The `PASS` line now carries the warning count, and the warnings are listed
+  below it within the budget.
+- New `deny_warnings` option in `orq.toml` (`clippy -- -D warnings`), which
+  the case uses.
+- `orq.toml` is now part of the cache key.
+- `orq-eval` loads each case's `orq.toml`, as real use does.
+
+Open items:
+- The agent run against the real API is still pending. It needs the
+  `ANTHROPIC_API_KEY` repository secret, and is started by hand from the
+  `eval` workflow. Estimated cost for 20 cases × 2 modes: ~$3 with Opus,
+  ~$1.40 with Sonnet, ~$0.07 with Haiku.
+- `StatsRecord.raw_tokens`, and named pipes on Windows (carried over).

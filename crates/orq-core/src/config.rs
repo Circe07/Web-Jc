@@ -40,6 +40,7 @@ pub enum NextestMode {
 /// nextest = "auto"
 /// ignore = ["docs/**"]
 /// autostart_daemon = true
+/// deny_warnings = false
 ///
 /// [build]
 /// features = ["serde"]
@@ -64,6 +65,9 @@ pub struct Config {
     /// Whether `orq mcp` starts a daemon for the workspace when none is
     /// running (`ORQ_NO_DAEMON=1` disables daemons altogether).
     pub autostart_daemon: bool,
+    /// Treat compiler and clippy warnings as errors (`clippy -- -D warnings`)
+    /// so they stop the ladder. Applies when the clippy step runs.
+    pub deny_warnings: bool,
     /// Default feature/target selection.
     pub build: BuildOptions,
 }
@@ -77,6 +81,7 @@ impl Default for Config {
             nextest: NextestMode::Auto,
             ignore: Vec::new(),
             autostart_daemon: true,
+            deny_warnings: false,
             build: BuildOptions::default(),
         }
     }
@@ -155,6 +160,7 @@ mod tests {
             nextest = "never"
             ignore = ["docs/**"]
             autostart_daemon = false
+            deny_warnings = true
 
             [build]
             features = ["serde", "cli"]
@@ -168,6 +174,7 @@ mod tests {
         assert_eq!(config.nextest, NextestMode::Never);
         assert_eq!(config.ignore, ["docs/**"]);
         assert!(!config.autostart_daemon);
+        assert!(config.deny_warnings);
         assert_eq!(config.build.features, ["serde", "cli"]);
         assert_eq!(config.build.target.as_deref(), Some("aarch64-apple-darwin"));
         assert!(Config::from_toml_str("[build]\nfeaturs = []").is_err());

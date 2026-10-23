@@ -197,10 +197,11 @@ pub async fn run_case(
     let raw_step = capture::raw_step(&project, &spec.expected_fail_step)?;
     let raw_ladder = capture::raw_ladder(&project)?;
 
+    // The case's own `orq.toml` (e.g. `deny_warnings`) applies, as in real use.
     let config = Config {
         nextest: NextestMode::Never,
         up_to,
-        ..Config::default()
+        ..Config::load(&project).map_err(|e| EvalError::Run(format!("case {}: {e}", spec.id)))?
     };
     let pipeline: Pipeline<_, _, RedbCache, _> = Pipeline {
         analyzer: CargoImpactAnalyzer::new(config.clone()),

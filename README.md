@@ -7,7 +7,8 @@ tokens as possible:
 - **Impact analysis**: only the crates containing changed files and their
   reverse dependents are verified.
 - **Verification ladder**: fmt → check → clippy → tests (nextest when
-  available). It stops at the first step with errors; warnings don't stop it.
+  available). It stops at the first step with errors. Warnings don't stop it
+  (unless `deny_warnings = true`), but they are listed even on a pass.
 - **Result cache**: a BLAKE3 key over the relevant sources, toolchain,
   features/target and environment. An unchanged state answers from the cache
   in ~55 ms (~13 ms through the daemon).
@@ -114,6 +115,7 @@ lang = "en"            # report language: "en" | "es"
 nextest = "auto"       # "auto" | "always" | "never"
 ignore = ["docs/**"]   # changes to these paths are ignored (* and ** globs)
 autostart_daemon = true
+deny_warnings = false  # clippy -- -D warnings: warnings fail the ladder
 
 [build]                # passed to check/clippy/test (not fmt)
 features = ["serde"]
