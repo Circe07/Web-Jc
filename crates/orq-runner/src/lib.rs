@@ -591,8 +591,14 @@ pub(crate) fn compile_package_args(impact: &ImpactSet) -> Vec<String> {
 /// Unambiguous package ID spec for a workspace member (falls back to the
 /// name when the manifest path is not usable as a `file://` URL).
 fn package_spec(krate: &orq_core::CrateId) -> String {
-    let dir = krate.manifest_path.parent().filter(|d| d.is_absolute());
-    match dir.and_then(|d| d.to_str()) {
+    // Cargo matches the canonical path (on macOS `/var` is a symlink to
+    // `/private/var`), so resolve symlinks first.
+    let dir = krate
+        .manifest_path
+        .parent()
+        .filter(|d| d.is_absolute())
+        .map(|d| d.canonicalize().unwrap_or_else(|_| d.to_path_buf()));
+    match dir.as_deref().and_then(|d| d.to_str()) {
         // The `#name` fragment matters: without it cargo takes the last
         // path segment as the package name.
         Some(dir) if cfg!(unix) => format!("path+file://{dir}#{}", krate.name),
