@@ -886,6 +886,7 @@ dependencies = [
  "cargo_metadata",
  "insta",
  "orq-core",
+ "orq-impact",
  "serde",
  "serde_json",
  "tempfile",
