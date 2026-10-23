@@ -474,9 +474,39 @@ impl Runner {
             }
         }
 
-        let (output, finished) = self
-            .exec_tests(root, impact, index, build_args, use_nextest, None)
-            .await?;
+        let (output, finished) = match fine_test_selection(root, impact) {
+            // Only benches or examples changed: no test can be affected.
+            Some(selection) if selection.is_empty() => (
+                StepOutput {
+                    diagnostics: Vec::new(),
+                    test_failures: Vec::new(),
+                    passed: true,
+                },
+                true,
+            ),
+            Some(selection) => {
+                let mut merged = StepOutput {
+                    diagnostics: Vec::new(),
+                    test_failures: Vec::new(),
+                    passed: true,
+                };
+                let mut all_finished = true;
+                for run in &selection.runs {
+                    let (out, finished) = self
+                        .exec_tests_in(root, run, index, build_args, use_nextest)
+                        .await?;
+                    merged.passed &= out.passed;
+                    merged.diagnostics.extend(out.diagnostics);
+                    merged.test_failures.extend(out.test_failures);
+                    all_finished &= finished;
+                }
+                (merged, all_finished)
+            }
+            None => {
+                self.exec_tests(root, impact, index, build_args, use_nextest, None)
+                    .await?
+            }
+        };
         if finished {
             failures::save(
                 root,
@@ -485,6 +515,26 @@ impl Runner {
             );
         }
         Ok(output)
+    }
+
+    /// Runs one invocation of a finer test selection: its packages and,
+    /// for integration-only changes, just the `--test` targets involved.
+    async fn exec_tests_in(
+        &self,
+        root: &Path,
+        run: &orq_impact::TestRun,
+        index: &CrateIndex,
+        build_args: &[String],
+        use_nextest: bool,
+    ) -> Result<(StepOutput, bool), RunnerError> {
+        let mut args: Vec<String> = run
+            .packages
+            .iter()
+            .flat_map(|c| ["-p".to_string(), package_spec(c)])
+            .collect();
+        args.extend(run.target_args());
+        self.exec_tests_with(root, args, index, build_args, use_nextest, None)
+            .await
     }
 
     /// Runs the tests, all of them or only those named in `only` (exact
@@ -499,12 +549,33 @@ impl Runner {
         use_nextest: bool,
         only: Option<&[&str]>,
     ) -> Result<(StepOutput, bool), RunnerError> {
+        self.exec_tests_with(
+            root,
+            compile_package_args(impact),
+            index,
+            build_args,
+            use_nextest,
+            only,
+        )
+        .await
+    }
+
+    /// [`Self::exec_tests`] with explicit package/target selection arguments.
+    async fn exec_tests_with(
+        &self,
+        root: &Path,
+        selection_args: Vec<String>,
+        index: &CrateIndex,
+        build_args: &[String],
+        use_nextest: bool,
+        only: Option<&[&str]>,
+    ) -> Result<(StepOutput, bool), RunnerError> {
         let mut args: Vec<String> = if use_nextest {
             vec!["nextest".into(), "run".into()]
         } else {
             vec!["test".into()]
         };
-        args.extend(compile_package_args(impact));
+        args.extend(selection_args);
         args.push("--no-fail-fast".into());
         args.extend(build_args.iter().cloned());
         if let Some(names) = only {
@@ -552,6 +623,18 @@ impl Runner {
             finished,
         ))
     }
+}
+
+/// A test selection finer than "every affected crate", or `None` to keep the
+/// per-crate behaviour: on a full rebuild, when no changed files are known,
+/// when the selection is no finer than whole crates, or when it cannot be
+/// computed (best effort: never fewer tests than needed).
+fn fine_test_selection(root: &Path, impact: &ImpactSet) -> Option<orq_impact::TestSelection> {
+    if impact.full_rebuild || impact.changed_files.is_empty() {
+        return None;
+    }
+    let selection = orq_impact::select_tests(root, impact).ok()?;
+    (selection.is_empty() || !selection.is_whole_crates()).then_some(selection)
 }
 
 /// Note added to the report when only the previously failing tests ran.
