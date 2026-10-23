@@ -1,0 +1,12 @@
+id = "type-mismatch-parse"
+category = "type-mismatch"
+difficulty = "easy"
+description = "The crate does not compile. Make `handle` return the request id as a number."
+up_to = "check"
+expected_fail_step = "check"
+
+[[facts]]
+code = "E0308"
+file = "src/lib.rs"
+line = 6
+label = "expected `u64`"

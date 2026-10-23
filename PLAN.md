@@ -359,6 +359,16 @@ Base preparada por el líder (`4aabdb2`):
 
 Fuera de esta oleada: medir la calidad de la compresión con tareas reales (Oleada 6), named pipes en Windows.
 
+### Oleada 6 — Calidad de la compresión medida con tareas reales (3 subagentes en paralelo)
+
+Base preparada por el líder: el contrato de casos en `eval/README.md`, dos casos de ejemplo y `eval/validate.sh`.
+
+**T6.1 Corpus** (`eval/cases/**`): al menos 14 casos rotos con su arreglo de referencia, de distintas categorías (tipos, préstamos, lifetimes, traits, cascada de imports, varios crates, tests de lógica, clippy, features). Todos validados con `eval/validate.sh`.
+
+**T6.2 Métricas offline** (`crates/orq-eval`, `publish = false`): salida cruda de cargo frente al informe de orq con presupuestos de 200, 500 y 1500 tokens. Mide tokens y *fact recall* por caso. Genera un informe en markdown y JSON y tiene un job de CI.
+
+**T6.3 Arnés con agente** (`eval/agent/`): bucle con Claude (SDK oficial de Python) en los modos `raw` y `orq`, con `--mock` para probarlo sin clave. Mide éxito, turnos y tokens. Incluye un workflow manual con el secreto `ANTHROPIC_API_KEY` y `docs/eval.md`.
+
 ---
 
 ## 6. Fixtures (`fixtures/`)
