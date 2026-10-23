@@ -71,4 +71,51 @@ benches/compare.sh /tmp/orq-bench/rg 3
   skipped. After the fix, the repeated `orq verify --up-to check` on ripgrep is
   a cache hit in 125–171 ms (release build). The ripgrep table above was
   measured before the fix.
-- Not measured: daemon mode, `--up-to check`, and nextest.
+- Not measured: daemon mode, `--up-to check`, and nextest (see "Edit loop" below for nextest).
+
+## Edit loop (wave 8)
+
+`benches/edit_loop.py` measures what an agent waits for after each edit, with
+no model involved. For every build configuration it copies the test project
+(`eval/projects/tasktrack`, 4 crates with real dependencies) to a temp dir,
+builds it once (untimed, reported as "cold build"), then applies a small real
+edit N times and times each checker. Two edit kinds: a **leaf** edit (a crate
+nothing depends on) and a **root** edit (a crate every other crate depends on).
+Cells are medians in seconds.
+
+```
+cargo build --release -p orq-cli
+python3 benches/edit_loop.py --iterations 5 \
+    --config default --config line-tables --config deps-opt1 \
+    --config sccache --config wild --json edit-loop.json
+```
+
+`--config` and `--checker` are repeatable; the default is `default` with all
+checkers.
+
+**Checkers**
+
+- `cargo`: `cargo clippy --all-targets -- -D warnings`, then `cargo test`. What
+  an agent without orq runs.
+- `nextest`: the same clippy, then `cargo nextest run`. Isolates the effect of
+  the test runner. Needs `cargo-nextest`; otherwise the cell says "not installed".
+- `orq`: `orq verify --no-daemon --no-cache --up-to test`, so it does the same
+  work as the others (no daemon, no result cache).
+
+**Configurations** (a missing tool is reported as "not installed", never a crash)
+
+| Config | What it changes |
+| --- | --- |
+| `default` | Nothing: the baseline. |
+| `line-tables` | `CARGO_PROFILE_DEV_DEBUG=line-tables-only`: smaller debug info. |
+| `debug0` | `CARGO_PROFILE_DEV_DEBUG=0`: no debug info. |
+| `no-incremental` | `CARGO_INCREMENTAL=0`. |
+| `deps-opt1` | Dependencies at `opt-level = 1`, through `cargo --config 'profile.dev.package."*".opt-level=1'` (env vars cannot express the `"*"` key). `orq verify` has no way to pass cargo arguments, so orq is not measured here and its cells say "n/a". |
+| `sccache` | `RUSTC_WRAPPER=sccache`. |
+| `wild` | Links with the `wild` linker through clang (`--ld-path=wild`). |
+| `mold` | Links with `mold` through clang (`-fuse-ld=mold`). |
+
+**Take the real numbers on an idle machine.** Other builds running at the same
+time (another agent, an editor running rust-analyzer, a CI job) change every
+timing, so a run on a busy machine is only a smoke test of the script. Use
+`--iterations 1` for that, and do not record its numbers here.
