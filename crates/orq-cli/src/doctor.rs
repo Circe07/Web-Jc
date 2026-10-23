@@ -130,6 +130,8 @@ pub fn collect(root: Result<PathBuf, String>, probe: &dyn Probe) -> (Vec<Check>,
         checks.push(nextest_check(&Config::default(), probe));
     }
     checks.push(target_dir_check(&root));
+    checks.push(rust_analyzer_check(&root));
+    checks.push(fast_tools_check(probe));
     let daemon = probe.daemon_status(&root);
     checks.push(cache_check(&root, daemon.is_some()));
     checks.extend(daemon_checks(&root, daemon.as_ref()));
@@ -279,6 +281,130 @@ fn target_dir_check(root: &Path) -> Check {
         Level::Ok,
         format!("{} {state}", target.display()),
     )
+}
+
+/// Files where an editor keeps its rust-analyzer settings, relative to the
+/// workspace root. The first two are rust-analyzer's own config files.
+const RA_CONFIG_FILES: [&str; 5] = [
+    "rust-analyzer.toml",
+    ".rust-analyzer.toml",
+    ".vscode/settings.json",
+    ".helix/languages.toml",
+    ".zed/settings.json",
+];
+
+/// Lines of a JSON/TOML settings file that are not comments.
+fn code_lines(text: &str) -> impl Iterator<Item = &str> {
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with("//") && !l.starts_with('#'))
+}
+
+/// `true` when the file sets `targetDir` to something other than off.
+fn sets_target_dir(text: &str) -> bool {
+    code_lines(text).any(|l| l.contains("targetDir") && !l.contains("false") && !l.contains("null"))
+}
+
+/// rust-analyzer and `orq`/cargo sharing one `target/` makes both wait on
+/// "Blocking waiting for file lock on build directory".
+fn rust_analyzer_check(root: &Path) -> Check {
+    let name = "rust-analyzer";
+    let hint = "set `rust-analyzer.cargo.targetDir` to `true` (uses target/rust-analyzer) so it does not lock the build directory orq and cargo use";
+    let mut configured = Vec::new();
+    let mut separate = false;
+    for rel in RA_CONFIG_FILES {
+        let Ok(text) = std::fs::read_to_string(root.join(rel)) else {
+            continue;
+        };
+        let own_file = rel.ends_with("rust-analyzer.toml");
+        if own_file || code_lines(&text).any(|l| l.contains("rust-analyzer")) {
+            configured.push(rel);
+            separate |= sets_target_dir(&text);
+        }
+    }
+    if separate {
+        Check::new(
+            name,
+            Level::Ok,
+            "rust-analyzer uses its own target dir (no lock contention with orq/cargo)",
+        )
+    } else if configured.is_empty() {
+        Check::new(
+            name,
+            Level::Info,
+            format!("no rust-analyzer config in the project; if your editor runs it, {hint}"),
+        )
+    } else {
+        Check::new(
+            name,
+            Level::Warn,
+            format!(
+                "{} configures rust-analyzer without a separate target dir; {hint}",
+                configured.join(", ")
+            ),
+        )
+    }
+}
+
+/// Optional accelerators: `(label, program, args, install hint)`.
+const FAST_TOOLS: [(&str, &str, &[&str], &str); 5] = [
+    (
+        "sccache",
+        "sccache",
+        &["--version"],
+        "cargo install sccache --locked",
+    ),
+    (
+        "cargo-nextest",
+        "cargo",
+        &["nextest", "--version"],
+        "cargo install cargo-nextest --locked",
+    ),
+    (
+        "wild",
+        "wild",
+        &["--version"],
+        "cargo install wild-linker --locked",
+    ),
+    (
+        "mold",
+        "mold",
+        &["--version"],
+        "your package manager (mold)",
+    ),
+    (
+        "lld",
+        "ld.lld",
+        &["--version"],
+        "your package manager (lld) or `rustup component add llvm-tools`",
+    ),
+];
+
+/// Which optional build accelerators are installed, and how to get the rest.
+fn fast_tools_check(probe: &dyn Probe) -> Check {
+    let mut found = Vec::new();
+    let mut missing = Vec::new();
+    for (label, program, args, install) in FAST_TOOLS {
+        if probe.output(program, args, None).is_some() {
+            found.push(label);
+        } else {
+            missing.push(format!("{label}: {install}"));
+        }
+    }
+    let have = if found.is_empty() {
+        "none".to_string()
+    } else {
+        found.join(", ")
+    };
+    let detail = if missing.is_empty() {
+        format!("available: {have}")
+    } else {
+        format!(
+            "available: {have}. Not installed (optional, measure before adopting): {}",
+            missing.join("; ")
+        )
+    };
+    Check::new("fast tools", Level::Info, detail)
 }
 
 fn cache_check(root: &Path, daemon_running: bool) -> Check {
@@ -631,6 +757,119 @@ mod tests {
         drop(orq_cache::RedbCache::open_at(&db).unwrap());
         let (checks, _) = collect(Ok(dir.path().to_path_buf()), &fake());
         assert!(find(&checks, "cache").detail.contains("0 entries"));
+    }
+
+    #[test]
+    fn fast_tools_lists_available_and_install_commands() {
+        let dir = workspace();
+        let probe = Fake {
+            missing: vec!["sccache", "wild"],
+            ..fake()
+        };
+        let (checks, _) = collect(Ok(dir.path().to_path_buf()), &probe);
+        let c = find(&checks, "fast tools");
+        assert_eq!(c.level, Level::Info);
+        assert!(c.detail.contains("available: cargo-nextest, mold, lld"));
+        assert!(c.detail.contains("sccache: cargo install sccache --locked"));
+        assert!(c
+            .detail
+            .contains("wild: cargo install wild-linker --locked"));
+        assert!(all_ok(&checks));
+    }
+
+    #[test]
+    fn fast_tools_all_present_has_no_install_hints() {
+        let c = fast_tools_check(&fake());
+        assert!(c
+            .detail
+            .starts_with("available: sccache, cargo-nextest, wild, mold, lld"));
+        assert!(!c.detail.contains("Not installed"));
+    }
+
+    fn write(dir: &Path, rel: &str, text: &str) {
+        let path = dir.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
+    #[test]
+    fn rust_analyzer_without_config_is_informational() {
+        let dir = workspace();
+        let c = rust_analyzer_check(dir.path());
+        assert_eq!(c.level, Level::Info);
+        assert!(c.detail.contains("rust-analyzer.cargo.targetDir"));
+        // an unrelated editor settings file is not a rust-analyzer config
+        write(
+            dir.path(),
+            ".vscode/settings.json",
+            "{ \"editor.tabSize\": 4 }",
+        );
+        assert_eq!(rust_analyzer_check(dir.path()).level, Level::Info);
+    }
+
+    #[test]
+    fn rust_analyzer_sharing_target_warns_and_names_the_file() {
+        let dir = workspace();
+        write(
+            dir.path(),
+            ".vscode/settings.json",
+            "{ \"rust-analyzer.check.command\": \"clippy\" }",
+        );
+        let c = rust_analyzer_check(dir.path());
+        assert_eq!(c.level, Level::Warn);
+        assert!(c.detail.contains(".vscode/settings.json"));
+        assert!(c.detail.contains("targetDir"));
+        write(
+            dir.path(),
+            "rust-analyzer.toml",
+            "[cargo]\nfeatures = \"all\"\n",
+        );
+        let c = rust_analyzer_check(dir.path());
+        assert!(c
+            .detail
+            .contains("rust-analyzer.toml, .vscode/settings.json"));
+        let (checks, _) = collect(Ok(dir.path().to_path_buf()), &fake());
+        assert!(all_ok(&checks), "a warning never fails the doctor");
+    }
+
+    #[test]
+    fn rust_analyzer_with_separate_target_dir_is_ok() {
+        let dir = workspace();
+        write(
+            dir.path(),
+            ".vscode/settings.json",
+            "{ \"rust-analyzer.cargo.targetDir\": true }",
+        );
+        assert_eq!(rust_analyzer_check(dir.path()).level, Level::Ok);
+        write(
+            dir.path(),
+            "rust-analyzer.toml",
+            "[cargo]\ntargetDir = \"target/ra\"\n",
+        );
+        assert_eq!(rust_analyzer_check(dir.path()).level, Level::Ok);
+    }
+
+    #[test]
+    fn rust_analyzer_target_dir_off_or_commented_still_warns() {
+        let dir = workspace();
+        write(
+            dir.path(),
+            ".vscode/settings.json",
+            "{\n  // \"rust-analyzer.cargo.targetDir\": true,\n  \"rust-analyzer.cargo.targetDir\": false\n}",
+        );
+        assert_eq!(rust_analyzer_check(dir.path()).level, Level::Warn);
+        write(
+            dir.path(),
+            ".helix/languages.toml",
+            "[language-server.rust-analyzer.config.cargo]\n# targetDir = true\n",
+        );
+        assert_eq!(rust_analyzer_check(dir.path()).level, Level::Warn);
+        write(
+            dir.path(),
+            ".helix/languages.toml",
+            "[language-server.rust-analyzer.config.cargo]\ntargetDir = true\n",
+        );
+        assert_eq!(rust_analyzer_check(dir.path()).level, Level::Ok);
     }
 
     #[test]
