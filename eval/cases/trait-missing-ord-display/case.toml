@@ -1,0 +1,18 @@
+id = "trait-missing-ord-display"
+category = "missing-trait"
+difficulty = "medium"
+description = "The crate does not compile. `latest` should pick the newest release and `label` should print it as `vMAJOR.MINOR.PATCH`."
+up_to = "test"
+expected_fail_step = "check"
+
+[[facts]]
+code = "E0277"
+file = "src/lib.rs"
+line = 11
+label = "Ord"
+
+[[facts]]
+code = "E0277"
+file = "src/lib.rs"
+line = 17
+label = "Display"

@@ -1,0 +1,12 @@
+id = "borrow-use-after-move"
+category = "borrow-checker"
+difficulty = "easy"
+description = "The crate does not compile. `summarize` lists the job names and the total number of retries; make it build without changing its signature."
+up_to = "test"
+expected_fail_step = "check"
+
+[[facts]]
+code = "E0382"
+file = "src/lib.rs"
+line = 14
+label = "value borrowed here after move"

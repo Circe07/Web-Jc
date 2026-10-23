@@ -1,0 +1,12 @@
+id = "feature-gated-default"
+category = "feature-gate"
+difficulty = "medium"
+description = "The crate does not compile with its default features. `checksum` must work whether or not the optional `fast` feature is enabled."
+up_to = "test"
+expected_fail_step = "check"
+
+[[facts]]
+code = "E0425"
+file = "src/lib.rs"
+line = 3
+label = "checksum_impl"

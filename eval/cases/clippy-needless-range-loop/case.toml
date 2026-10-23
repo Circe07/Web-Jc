@@ -1,0 +1,11 @@
+id = "clippy-needless-range-loop"
+category = "clippy"
+difficulty = "easy"
+description = "The crate compiles and its tests pass, but `cargo clippy -- -D warnings` fails. Make the code lint-clean without changing behaviour."
+up_to = "clippy"
+expected_fail_step = "clippy"
+
+[[facts]]
+code = "clippy::needless_range_loop"
+file = "src/lib.rs"
+line = 4

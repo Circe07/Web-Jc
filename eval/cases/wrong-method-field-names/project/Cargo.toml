@@ -1,0 +1,9 @@
+[package]
+name = "wrong-method-field-names"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+
+[workspace]

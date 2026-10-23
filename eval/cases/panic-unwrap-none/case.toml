@@ -1,0 +1,11 @@
+id = "panic-unwrap-none"
+category = "test-panic"
+difficulty = "medium"
+description = "A test panics. `Catalog::total` must price a cart; items that are not in the catalog count as zero (do not change the tests)."
+up_to = "test"
+expected_fail_step = "test"
+
+[[facts]]
+file = "src/lib.rs"
+line = 17
+test = "tests::unknown_items_are_free"

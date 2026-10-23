@@ -1,0 +1,12 @@
+id = "lifetime-return-local"
+category = "lifetime"
+difficulty = "medium"
+description = "The crate does not compile. `canonical_name` must return the trimmed, lowercase form of a name; the existing tests must keep passing unchanged."
+up_to = "test"
+expected_fail_step = "check"
+
+[[facts]]
+code = "E0515"
+file = "src/lib.rs"
+line = 4
+label = "returns a reference to data owned by the current function"

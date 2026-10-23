@@ -1,0 +1,12 @@
+id = "non-exhaustive-match"
+category = "non-exhaustive"
+difficulty = "easy"
+description = "The crate does not compile. `apply` must handle every command: `Resume` only has an effect while paused."
+up_to = "test"
+expected_fail_step = "check"
+
+[[facts]]
+code = "E0004"
+file = "src/lib.rs"
+line = 20
+label = "Command::Resume"

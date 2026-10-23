@@ -1,0 +1,12 @@
+id = "panic-index-out-of-bounds"
+category = "test-panic"
+difficulty = "medium"
+description = "A test panics. Fix `deltas` so it returns the differences between neighbouring values without panicking."
+up_to = "test"
+expected_fail_step = "test"
+
+[[facts]]
+file = "src/lib.rs"
+line = 4
+label = "index out of bounds"
+test = "tests::differences_between_neighbours"

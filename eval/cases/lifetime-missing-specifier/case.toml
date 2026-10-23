@@ -1,0 +1,17 @@
+id = "lifetime-missing-specifier"
+category = "lifetime"
+difficulty = "easy"
+description = "The crate does not compile. Make `Token` and `longest_token` valid so that a token can borrow its text from the source string."
+up_to = "test"
+expected_fail_step = "check"
+
+[[facts]]
+code = "E0106"
+file = "src/lib.rs"
+line = 4
+label = "expected named lifetime parameter"
+
+[[facts]]
+code = "E0106"
+file = "src/lib.rs"
+line = 8

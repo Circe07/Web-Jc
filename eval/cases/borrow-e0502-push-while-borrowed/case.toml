@@ -1,0 +1,12 @@
+id = "borrow-e0502-push-while-borrowed"
+category = "borrow-checker"
+difficulty = "easy"
+description = "The crate does not compile. `record_summary` must append a summary line to the list and also return the longest name that was in it; keep that behaviour."
+up_to = "test"
+expected_fail_step = "check"
+
+[[facts]]
+code = "E0502"
+file = "src/lib.rs"
+line = 6
+label = "mutable borrow occurs here"

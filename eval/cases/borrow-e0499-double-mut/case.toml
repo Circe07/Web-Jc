@@ -1,0 +1,12 @@
+id = "borrow-e0499-double-mut"
+category = "borrow-checker"
+difficulty = "medium"
+description = "The crate does not compile. Make `Grid::swap_cells` exchange the values of two cells."
+up_to = "test"
+expected_fail_step = "check"
+
+[[facts]]
+code = "E0499"
+file = "src/lib.rs"
+line = 24
+label = "second mutable borrow occurs here"
