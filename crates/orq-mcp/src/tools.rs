@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use orq_compress::LlmCompressor;
 use orq_core::{
-    stats, BuildOptions, ChangeSet, Compressor, Config, CoreError, CrateId, ImpactAnalyzer, Step,
-    VerifyRequest,
+    estimate_tokens, stats, BuildOptions, ChangeSet, Compressor, Config, CoreError, CrateId,
+    ImpactAnalyzer, Step, VerifyRequest,
 };
 use orq_daemon::client::{self, Mode};
 use orq_impact::CargoImpactAnalyzer;
@@ -29,6 +29,7 @@ struct VerifyArgs {
     files: Option<Vec<String>>,
     up_to: Option<Step>,
     budget: Option<usize>,
+    fix: bool,
     #[serde(flatten)]
     build: BuildArgs,
 }
@@ -158,7 +159,10 @@ pub(crate) fn definitions() -> Vec<Tool> {
          returns a report that is already compact (errors deduplicated and ranked, no noise). \
          Do not run cargo commands yourself. A failing build is a normal result (read the \
          report), not a tool failure. Use `up_to` to choose how far to go: `check` while \
-         iterating, `clippy` for lints, `test` (default) before you finish. Pass `features`, \
+         iterating, `clippy` for lints, `test` (default) before you finish. Pass `fix: true` \
+         to apply the machine-applicable compiler and clippy suggestions first: the report \
+         starts with a `fixed: ...` line naming the files orq edited (re-read them), so you \
+         skip the turn that would only apply mechanical lint fixes. Pass `features`, \
          `all_features`, `no_default_features` or `target` to verify another feature set or \
          target; otherwise the orq.toml [build] defaults apply.",
         schema(json!({
@@ -171,6 +175,10 @@ pub(crate) fn definitions() -> Vec<Tool> {
                     "description": "Last step to run. Default: from orq config (usually test)."
                 },
                 "budget": budget,
+                "fix": {
+                    "type": "boolean",
+                    "description": "Apply the machine-applicable compiler/clippy fixes to the affected crates before verifying. The report says which files were edited. Default false."
+                },
             })),
             "additionalProperties": false
         })),
@@ -252,11 +260,11 @@ pub(crate) async fn call(
     let args = Value::Object(arguments.unwrap_or_default());
     let result = match name {
         "verify" => match parse::<VerifyArgs>(args) {
-            Ok(a) => verify(state, a.files, a.up_to, a.budget, a.build).await,
+            Ok(a) => verify(state, a.files, a.up_to, a.budget, a.build, a.fix).await,
             Err(e) => Err(e),
         },
         "run_affected_tests" => match parse::<TestArgs>(args) {
-            Ok(a) => verify(state, a.files, Some(Step::Test), a.budget, a.build).await,
+            Ok(a) => verify(state, a.files, Some(Step::Test), a.budget, a.build, false).await,
             Err(e) => Err(e),
         },
         "explain_error" => match parse::<ExplainArgs>(args) {
@@ -318,18 +326,44 @@ async fn verify(
     up_to: Option<Step>,
     budget: Option<usize>,
     build: BuildArgs,
+    fix: bool,
 ) -> Result<CallToolResult, String> {
     let budget = budget.unwrap_or(state.config.budget);
     let up_to = up_to.unwrap_or(state.config.up_to);
+    let build = build.options(&state.config.build);
+    let mut change_set = files
+        .filter(|f| !f.is_empty())
+        .map(|f| changes(&state.root, f));
+    // `fix`: apply the machine-applicable suggestions first, so the report
+    // describes the code the agent will actually have.
+    let mut fixed: Option<Vec<String>> = None;
+    let mut note: Option<String> = None;
+    if fix && up_to != Step::Fmt {
+        let effective = build.clone().unwrap_or_else(|| state.config.build.clone());
+        let (set, outcome) = fix_files(state, change_set.take(), &effective)
+            .await
+            .map_err(|e| format!("verify failed: {e}"))?;
+        change_set = Some(set);
+        fixed = Some(
+            outcome
+                .files_changed
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect(),
+        );
+        note = outcome.summary();
+    }
+    let report_budget = match &note {
+        Some(note) => budget.saturating_sub(estimate_tokens(note) + 1),
+        None => budget,
+    };
     let request = VerifyRequest {
         root: state.root.clone(),
-        changes: files
-            .filter(|f| !f.is_empty())
-            .map(|f| changes(&state.root, f)),
+        changes: change_set,
         up_to,
-        token_budget: budget,
+        token_budget: report_budget,
         use_cache: true,
-        build: build.options(&state.config.build),
+        build,
     };
     let mode = if no_daemon() {
         Mode::InProcess
@@ -340,14 +374,50 @@ async fn verify(
         .await
         .map_err(|e| format!("verify failed: {e}"))?;
     let result = verified.result;
-    let report = LlmCompressor::new(state.config.lang).compress(&result, budget);
+    let report = LlmCompressor::new(state.config.lang).compress(&result, report_budget);
     let record = stats::StatsRecord::new(&result, &report, up_to, verified.via_daemon, "mcp");
     if let Err(e) = stats::append(&state.root, &record) {
         tracing::warn!("could not record stats: {e}");
     }
-    let mut out = CallToolResult::success(vec![ContentBlock::text(report.text)]);
-    out.structured_content = Some(report.json);
+    let text = match &note {
+        Some(note) => format!("{note}\n{}", report.text.trim_end()),
+        None => report.text,
+    };
+    let mut out = CallToolResult::success(vec![ContentBlock::text(text)]);
+    let mut json = report.json;
+    if let (Some(fixed), Value::Object(map)) = (fixed, &mut json) {
+        map.insert("fixed".to_string(), json!(fixed));
+    }
+    out.structured_content = Some(json);
     Ok(out)
+}
+
+/// Detects (or takes) the changed files, analyzes their impact and applies
+/// the machine-applicable fixes to the affected crates. Returns the change
+/// set, so the verification that follows covers the same crates.
+async fn fix_files(
+    state: &State,
+    explicit: Option<ChangeSet>,
+    build: &BuildOptions,
+) -> Result<(ChangeSet, orq_runner::fix::FixOutcome), String> {
+    let root = state.root.clone();
+    let config = state.config.clone();
+    let (change_set, impact) = tokio::task::spawn_blocking(move || -> Result<_, CoreError> {
+        let analyzer = CargoImpactAnalyzer::new(config);
+        let change_set = match explicit {
+            Some(set) => set,
+            None => analyzer.detect_changes(&root)?,
+        };
+        let impact = analyzer.analyze(&root, &change_set)?;
+        Ok((change_set, impact))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+    let outcome = orq_runner::fix::apply_fixes(&state.root, &impact, build)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok((change_set, outcome))
 }
 
 fn explain(code: &str) -> Result<CallToolResult, String> {
@@ -401,23 +471,10 @@ async fn apply_fix(
 ) -> Result<CallToolResult, String> {
     let budget = budget.unwrap_or(state.config.budget);
     let up_to = up_to.unwrap_or(state.config.up_to);
-    let root = state.root.clone();
-    let config = state.config.clone();
-    let explicit = files.filter(|f| !f.is_empty());
-    let (change_set, impact) = tokio::task::spawn_blocking(move || -> Result<_, CoreError> {
-        let analyzer = CargoImpactAnalyzer::new(config);
-        let change_set = match explicit {
-            Some(f) => changes(&root, f),
-            None => analyzer.detect_changes(&root)?,
-        };
-        let impact = analyzer.analyze(&root, &change_set)?;
-        Ok((change_set, impact))
-    })
-    .await
-    .map_err(|e| format!("apply_fix failed: {e}"))?
-    .map_err(|e| format!("apply_fix failed: {e}"))?;
-
-    let outcome = orq_runner::fix::apply_fixes(&state.root, &impact, &state.config.build)
+    let explicit = files
+        .filter(|f| !f.is_empty())
+        .map(|f| changes(&state.root, f));
+    let (change_set, outcome) = fix_files(state, explicit, &state.config.build)
         .await
         .map_err(|e| format!("apply_fix failed: {e}"))?;
     let fixed: Vec<String> = outcome
