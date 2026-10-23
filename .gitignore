@@ -5,3 +5,5 @@ fixtures/*/Cargo.lock
 *.snap.new
 .DS_Store
 /.claude/worktrees/
+eval/cases/*/project/target
+eval/cases/*/project/Cargo.lock
