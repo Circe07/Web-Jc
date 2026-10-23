@@ -1,0 +1,12 @@
+{
+  "name": "orq-marketplace",
+  "owner": { "name": "orq contributors" },
+  "description": "Claude Code plugins for orq, the Rust build orchestrator for AI agents.",
+  "plugins": [
+    {
+      "name": "orq",
+      "source": "./orq",
+      "description": "Verify Rust changes after every edit (hook) and on demand (MCP server). Requires the orq binary on PATH."
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "name": "orq",
+  "version": "0.3.0",
+  "description": "Automatic Rust verification for Claude Code: a PostToolUse hook that checks every edit and an MCP server with verify, run_affected_tests, explain_error and impact tools. Requires the orq binary on PATH.",
+  "author": { "name": "orq contributors" },
+  "license": "MIT OR Apache-2.0",
+  "keywords": ["rust", "cargo", "build", "verify", "mcp"]
+}
