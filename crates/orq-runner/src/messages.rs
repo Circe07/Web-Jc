@@ -52,6 +52,11 @@ struct Span {
 #[derive(Deserialize)]
 struct SpanText {
     text: String,
+    /// 1-based char columns of the span within `text`.
+    #[serde(default)]
+    highlight_start: usize,
+    #[serde(default)]
+    highlight_end: usize,
 }
 
 #[derive(Deserialize)]
@@ -92,7 +97,24 @@ fn is_summary(message: &str) -> bool {
         })
 }
 
+/// The first suggestion of `msg`, with its context when rustc gives it.
+///
+/// A suggested replacement alone is a fragment (`: Ord`, `+ Clone`) that says
+/// neither where it goes nor why, so when the help's spans sit on one source
+/// line the result is that line with the edits applied, then the help text
+/// (code first, so clipping a long line drops the prose, not the fix):
+/// ``line 8: `fn f<T: Ord>()` (consider restricting type parameter `T` with trait `Ord`)``.
 fn suggestion(msg: &RustcMessage) -> Option<String> {
+    let has_edit = |s: &Span| s.suggested_replacement.is_some();
+    if let Some(help) = msg.children.iter().find(|c| c.spans.iter().any(has_edit)) {
+        if let Some((line, patched)) = patched_line(&help.spans) {
+            return Some(format!(
+                "line {line}: `{}` ({})",
+                patched.trim(),
+                help.message.trim_end_matches(':')
+            ));
+        }
+    }
     msg.children
         .iter()
         .flat_map(|c| c.spans.iter())
@@ -100,6 +122,42 @@ fn suggestion(msg: &RustcMessage) -> Option<String> {
         .filter_map(|s| s.suggested_replacement.as_deref())
         .find(|r| !r.is_empty())
         .map(str::to_string)
+}
+
+/// The source line of `spans` with every suggested replacement applied, when
+/// they all edit the same single line; `None` otherwise.
+fn patched_line(spans: &[Span]) -> Option<(u32, String)> {
+    let mut edits: Vec<(&Span, &SpanText, &str)> = Vec::new();
+    for s in spans {
+        let Some(replacement) = s.suggested_replacement.as_deref() else {
+            continue;
+        };
+        let [text] = s.text.as_slice() else {
+            return None;
+        };
+        if replacement.contains('\n') || text.highlight_start == 0 {
+            return None;
+        }
+        edits.push((s, text, replacement));
+    }
+    let &(first, source, _) = edits.first()?;
+    if edits
+        .iter()
+        .any(|(s, t, _)| s.line_start != first.line_start || t.text != source.text)
+    {
+        return None;
+    }
+    let mut chars: Vec<char> = source.text.chars().collect();
+    // Right to left, so earlier columns stay valid.
+    edits.sort_by_key(|(_, t, _)| std::cmp::Reverse(t.highlight_start));
+    for (_, t, replacement) in edits {
+        let (start, end) = (t.highlight_start - 1, t.highlight_end.saturating_sub(1));
+        if start > end || end > chars.len() {
+            return None;
+        }
+        chars.splice(start..end, replacement.chars());
+    }
+    Some((first.line_start, chars.into_iter().collect()))
 }
 
 fn to_diagnostic(
@@ -273,6 +331,19 @@ not json at all
         assert_eq!(d.snippet.as_deref(), Some("    let x = 1;"));
         assert_eq!(d.suggestion.as_deref(), Some("fix()"));
         assert_eq!(d.crate_id.as_ref().map(|c| c.name.as_str()), Some("demo"));
+    }
+
+    #[test]
+    fn suggestion_shows_help_and_patched_line() {
+        let msg = r#"{"reason":"compiler-message","package_id":"path+file:///ws#demo@0.1.0","manifest_path":"/ws/Cargo.toml","target":{"name":"demo"},"message":{"rendered":"x","$message_type":"diagnostic","children":[{"children":[],"code":null,"level":"help","message":"consider restricting type parameter `T` with trait `Ord`","rendered":null,"spans":[{"file_name":"src/lib.rs","line_start":8,"column_start":14,"is_primary":true,"text":[{"text":"pub fn mode<T>(values: &[T]) -> Option<T> {","highlight_start":14,"highlight_end":14}],"suggested_replacement":": std::cmp::Ord","expansion":null}]}],"level":"error","message":"the trait bound `T: Ord` is not satisfied","spans":[{"file_name":"src/lib.rs","line_start":18,"column_start":10,"is_primary":true,"text":[{"text":"        .min()","highlight_start":10,"highlight_end":13}],"suggested_replacement":null,"expansion":null}],"code":{"code":"E0277","explanation":null}}}"#;
+        let diags = parse_compiler_messages(msg, Step::Check, &index());
+        assert_eq!(
+            diags[0].suggestion.as_deref(),
+            Some(
+                "line 8: `pub fn mode<T: std::cmp::Ord>(values: &[T]) -> Option<T> {` \
+                 (consider restricting type parameter `T` with trait `Ord`)"
+            )
+        );
     }
 
     #[test]

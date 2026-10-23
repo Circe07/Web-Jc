@@ -38,7 +38,7 @@ expression: normalized
       "column": 24,
       "snippet": "pub fn is_empty_len(v: &Vec<u32>) -> bool {",
       "label": null,
-      "suggestion": "&[u32]",
+      "suggestion": "line 1: `pub fn is_empty_len(v: &[u32]) -> bool {` (change this to)",
       "crate_id": {
         "name": "clippy-warn",
         "manifest_path": "[manifest]"
@@ -54,7 +54,7 @@ expression: normalized
       "column": 24,
       "snippet": "pub fn is_empty_len(v: &Vec<u32>) -> bool {",
       "label": null,
-      "suggestion": "&[u32]",
+      "suggestion": "line 1: `pub fn is_empty_len(v: &[u32]) -> bool {` (change this to)",
       "crate_id": {
         "name": "clippy-warn",
         "manifest_path": "[manifest]"
@@ -70,7 +70,7 @@ expression: normalized
       "column": 5,
       "snippet": "    return v.len() == 0;",
       "label": null,
-      "suggestion": "v.len() == 0",
+      "suggestion": "line 2: `v.len() == 0` (remove `return`)",
       "crate_id": {
         "name": "clippy-warn",
         "manifest_path": "[manifest]"
@@ -86,7 +86,7 @@ expression: normalized
       "column": 5,
       "snippet": "    return v.len() == 0;",
       "label": null,
-      "suggestion": "v.len() == 0",
+      "suggestion": "line 2: `v.len() == 0` (remove `return`)",
       "crate_id": {
         "name": "clippy-warn",
         "manifest_path": "[manifest]"
@@ -102,7 +102,7 @@ expression: normalized
       "column": 12,
       "snippet": "    return v.len() == 0;",
       "label": null,
-      "suggestion": "v.is_empty()",
+      "suggestion": "line 2: `return v.is_empty();` (using `is_empty` is clearer and more explicit)",
       "crate_id": {
         "name": "clippy-warn",
         "manifest_path": "[manifest]"
@@ -118,7 +118,7 @@ expression: normalized
       "column": 12,
       "snippet": "    return v.len() == 0;",
       "label": null,
-      "suggestion": "v.is_empty()",
+      "suggestion": "line 2: `return v.is_empty();` (using `is_empty` is clearer and more explicit)",
       "crate_id": {
         "name": "clippy-warn",
         "manifest_path": "[manifest]"
