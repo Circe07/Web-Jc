@@ -12,6 +12,7 @@ mod failures;
 pub mod fix;
 mod index;
 mod messages;
+mod signatures;
 mod targets;
 mod test_out;
 mod util;
@@ -353,6 +354,13 @@ impl Runner {
             targets::compile_target_args(self.cargo_bin(), root, impact, build.targets).await,
         );
         args.push("--message-format=json".into());
+        if use_clippy {
+            // A crate that fails to compile must not stop the others from
+            // being built and linted: the report then carries the lint
+            // findings of the crates that compile next to the errors of the
+            // ones that do not, and the agent fixes all of it in one turn.
+            args.push("--keep-going".into());
+        }
         args.extend(build_args);
         // Passed to clippy-driver only: RUSTFLAGS would rebuild every dependency.
         if use_clippy && self.config.deny_warnings {
@@ -361,11 +369,12 @@ impl Runner {
         let out = self.run_cargo(root, &args, &[]).await?;
         let duration_ms = millis(started.elapsed());
 
-        let mut diagnostics = if use_clippy {
+        let diagnostics = if use_clippy {
             messages::parse_clippy_messages(&out.stdout, index)
         } else {
             messages::parse_compiler_messages(&out.stdout, Step::Check, index)
         };
+        let mut diagnostics = signatures::annotate(root, diagnostics);
         let has_error_in = |diagnostics: &[Diagnostic], step: Step| {
             diagnostics
                 .iter()

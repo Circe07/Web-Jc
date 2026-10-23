@@ -33,6 +33,11 @@ impl CrateIndex {
         }
     }
 
+    /// The workspace root.
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
+    }
+
     /// Makes `path` relative to the workspace root when it lies inside it.
     pub(crate) fn relative(&self, path: &Path) -> PathBuf {
         if path.is_absolute() {
