@@ -91,6 +91,18 @@ fn two_verifies_then_stats() {
     assert_eq!(v["pass"], 2);
     assert!((v["cache_hit_rate"].as_f64().unwrap() - 0.5).abs() < 1e-9);
     assert_eq!(v["by_cache"]["hit"]["count"], 1);
+    assert_eq!(v["savings"]["estimate"], true);
+    assert_eq!(v["savings"]["hits_counted"], 1);
+    let raw = v["savings"]["raw_tokens"].as_u64().unwrap();
+    let sent = v["savings"]["report_tokens"].as_u64().unwrap();
+    assert!(raw > sent, "raw {raw} should exceed sent {sent}");
+    assert_eq!(v["savings"]["tokens_saved"].as_u64().unwrap(), raw - sent);
+
+    orq(dir.path())
+        .args(["stats"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("savings (estimate)"));
 
     orq(dir.path())
         .args(["stats", "--last", "1"])

@@ -29,6 +29,75 @@ pub struct StatsArgs {
     pub last: Option<usize>,
 }
 
+/// Estimated ratio between the tokens of raw `cargo build && cargo test`
+/// output and the compact report. `StatsRecord` does not record the raw size,
+/// so savings are an ESTIMATE from `docs/benchmarks.md`: about 40x on
+/// `fixtures/multi` and 56x on ripgrep; the lower figure is used so the
+/// estimate errs on the conservative side.
+pub const RAW_TO_COMPACT_RATIO: u64 = 40;
+
+/// Estimated savings of a set of records. Every figure is an estimate; see
+/// [`RAW_TO_COMPACT_RATIO`] for the token basis.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Savings {
+    /// Estimated tokens of the raw cargo output the agent would have read.
+    pub raw_tokens: u64,
+    /// Tokens actually sent (sum over records).
+    pub report_tokens: u64,
+    /// `raw_tokens - report_tokens`.
+    pub tokens_saved: u64,
+    /// Per cache hit: median miss duration minus the hit's duration (never
+    /// negative), summed over hits. Zero when there is no hit or no miss.
+    pub time_saved_ms: u64,
+    /// Cache hits counted in `time_saved_ms`.
+    pub hits_counted: usize,
+}
+
+impl Savings {
+    fn of(records: &[StatsRecord], miss_median_ms: u64, miss_count: usize) -> Self {
+        let report_tokens: u64 = records
+            .iter()
+            .map(|r| u64::try_from(r.tokens).unwrap_or(u64::MAX))
+            .fold(0, u64::saturating_add);
+        let raw_tokens = report_tokens.saturating_mul(RAW_TO_COMPACT_RATIO);
+        let (time_saved_ms, hits_counted) = if miss_count == 0 {
+            (0, 0)
+        } else {
+            records
+                .iter()
+                .filter(|r| r.cache_hit)
+                .fold((0u64, 0usize), |(sum, n), r| {
+                    (
+                        sum.saturating_add(miss_median_ms.saturating_sub(r.duration_ms)),
+                        n + 1,
+                    )
+                })
+        };
+        Self {
+            raw_tokens,
+            report_tokens,
+            tokens_saved: raw_tokens.saturating_sub(report_tokens),
+            time_saved_ms,
+            hits_counted,
+        }
+    }
+
+    fn to_json(&self) -> Value {
+        json!({
+            "estimate": true,
+            "basis": format!(
+                "raw tokens = report tokens x {RAW_TO_COMPACT_RATIO} (docs/benchmarks.md); \
+                 time = sum over cache hits of (median miss - hit duration)"
+            ),
+            "raw_tokens": self.raw_tokens,
+            "report_tokens": self.report_tokens,
+            "tokens_saved": self.tokens_saved,
+            "time_saved_ms": self.time_saved_ms,
+            "hits_counted": self.hits_counted,
+        })
+    }
+}
+
 /// Nearest-rank percentile (`p` in 0..=100) of an ascending-sorted slice.
 /// Returns 0 for an empty slice.
 pub fn percentile(sorted: &[u64], p: u32) -> u64 {
@@ -92,6 +161,8 @@ pub struct Summary {
     pub daemon: DurationStats,
     /// Duration of in-process verifications.
     pub in_process: DurationStats,
+    /// Estimated savings versus raw cargo output and versus recomputing.
+    pub savings: Savings,
 }
 
 /// Computes the [`Summary`] of `records` (an empty slice gives zeros).
@@ -114,6 +185,8 @@ pub fn summarize(records: &[StatsRecord]) -> Summary {
     } else {
         (hits as f64 / count as f64, token_sum / count as f64)
     };
+    let miss = DurationStats::of(&pick(&|r| !r.cache_hit));
+    let savings = Savings::of(records, miss.median_ms, miss.count);
     Summary {
         count,
         pass,
@@ -123,9 +196,10 @@ pub fn summarize(records: &[StatsRecord]) -> Summary {
         avg_tokens,
         p90_tokens: percentile(&tokens, 90),
         hit: DurationStats::of(&pick(&|r| r.cache_hit)),
-        miss: DurationStats::of(&pick(&|r| !r.cache_hit)),
+        miss,
         daemon: DurationStats::of(&pick(&|r| r.via_daemon)),
         in_process: DurationStats::of(&pick(&|r| !r.via_daemon)),
+        savings,
     }
 }
 
@@ -148,6 +222,7 @@ impl Summary {
                 "daemon": self.daemon.to_json(),
                 "in_process": self.in_process.to_json(),
             },
+            "savings": self.savings.to_json(),
         })
     }
 
@@ -177,6 +252,19 @@ impl Summary {
         if self.daemon.count > 0 && self.in_process.count > 0 {
             groups.push(("daemon", &self.daemon));
             groups.push(("in-process", &self.in_process));
+        }
+        let sv = &self.savings;
+        out.push_str(&format!(
+            "\nsavings (estimate)\n  tokens  ~{} raw cargo output vs {} sent: ~{} saved (raw = sent x {RAW_TO_COMPACT_RATIO}, see docs/benchmarks.md)\n",
+            sv.raw_tokens, sv.report_tokens, sv.tokens_saved
+        ));
+        if sv.hits_counted > 0 {
+            out.push_str(&format!(
+                "  time    ~{} ms saved by {} cache hit(s) (median miss {} ms minus each hit)\n",
+                sv.time_saved_ms, sv.hits_counted, self.miss.median_ms
+            ));
+        } else {
+            out.push_str("  time    no cache hit to compare with a miss yet\n");
         }
         out.push_str("\nbreakdown          n  median_ms  p90_ms\n");
         for (name, d) in groups.into_iter().filter(|(_, d)| d.count > 0) {
@@ -285,6 +373,37 @@ mod tests {
         assert_eq!(s.miss.count, 0);
         assert_eq!(s.miss.median_ms, 0);
         assert!(s.render().contains("100.0%"));
+    }
+
+    #[test]
+    fn savings_are_estimated_from_tokens_and_hit_vs_miss_time() {
+        let r = [
+            rec(1000, false, false, 10),
+            rec(3000, false, false, 10),
+            rec(100, true, false, 10),
+            rec(5000, true, false, 10),
+        ];
+        let s = summarize(&r);
+        // miss median (nearest-rank, lower middle) = 1000
+        assert_eq!(s.miss.median_ms, 1000);
+        assert_eq!(s.savings.report_tokens, 40);
+        assert_eq!(s.savings.raw_tokens, 40 * RAW_TO_COMPACT_RATIO);
+        assert_eq!(s.savings.tokens_saved, 40 * RAW_TO_COMPACT_RATIO - 40);
+        // hit 1: 1000-100 = 900; hit 2 is slower than the median miss -> 0
+        assert_eq!(s.savings.time_saved_ms, 900);
+        assert_eq!(s.savings.hits_counted, 2);
+        let text = s.render();
+        assert!(text.contains("savings (estimate)"));
+        assert!(text.contains("900 ms saved"));
+        assert_eq!(s.to_json()["savings"]["estimate"], true);
+    }
+
+    #[test]
+    fn no_time_saving_without_a_miss() {
+        let s = summarize(&[rec(5, true, false, 3)]);
+        assert_eq!(s.savings.time_saved_ms, 0);
+        assert_eq!(s.savings.hits_counted, 0);
+        assert!(s.render().contains("no cache hit to compare"));
     }
 
     #[test]
