@@ -3,8 +3,10 @@
 //!
 //! The daemon watches the workspace (debounced, ignoring `target/` and
 //! `.git/`), keeps the cargo metadata in memory, runs a background
-//! `cargo check` warm-up after every change and serves one JSON line per
-//! connection on the Unix socket given by [`orq_core::ipc::socket_path`].
+//! speculative verification after every change (clippy, then the configured
+//! `up_to`, cancelled when a newer change arrives; results go to the
+//! content-keyed cache, so a later `verify` of the same tree is answered
+//! without running cargo) and serves one JSON line per connection on the Unix socket given by [`orq_core::ipc::socket_path`].
 //!
 //! Windows (named pipes) is not implemented yet: [`serve`] returns a clear
 //! [`CoreError`] there.
@@ -17,6 +19,8 @@ use orq_core::CoreError;
 pub mod client;
 #[cfg(unix)]
 mod server;
+#[cfg(unix)]
+mod speculate;
 
 /// Daemon tuning knobs.
 #[derive(Debug, Clone, PartialEq, Eq)]

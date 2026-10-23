@@ -16,7 +16,7 @@
 
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -26,8 +26,8 @@ use orq_cache::RedbCache;
 use orq_compress::LlmCompressor;
 use orq_core::ipc::{self, DaemonRequest, DaemonResponse, DaemonStatus};
 use orq_core::{
-    CompactReport, Config, CoreError, ImpactAnalyzer, Pipeline, ResultCache, Step, StepRunner,
-    VerifyRequest,
+    CompactReport, Config, CoreError, ImpactAnalyzer, ImpactSet, Pipeline, ResultCache, Step,
+    StepRunner, VerifyRequest, VerifyResult,
 };
 use orq_impact::CargoImpactAnalyzer;
 use orq_runner::Runner;
@@ -35,6 +35,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{mpsc, watch, Mutex, Notify};
 
+use crate::speculate::{derive, is_tool_failure, Speculation};
 use crate::DaemonOptions;
 
 /// Largest accepted request line, in bytes.
@@ -77,12 +78,10 @@ struct Shared {
     pipeline: DaemonPipeline,
     /// Only one cargo invocation at a time per workspace.
     cargo: Mutex<()>,
-    /// `true` while a warm-up is queued or running.
-    warming: watch::Sender<bool>,
-    /// Set when a change arrived; consumed by the warm-up worker.
-    pending: AtomicBool,
-    /// Bumped on every relevant change; lets a running prebuild notice newer work.
-    change_gen: watch::Sender<u64>,
+    /// Speculative verification state (see `speculate`).
+    spec: Speculation,
+    /// Bumped by a request that needs cargo, so a speculative run steps aside.
+    demand: watch::Sender<u64>,
     wake_warmup: Notify,
     /// Wakes the main loop to reset the idle timer.
     activity: Notify,
@@ -132,16 +131,13 @@ pub(crate) async fn serve(root: &Path, options: DaemonOptions) -> Result<(), Cor
         compressor: LlmCompressor::new(config.lang),
         build: config.build.clone(),
     };
-    let (warming, _) = watch::channel(false);
-    let (change_gen, _) = watch::channel(0_u64);
     let shared = Arc::new(Shared {
         root: root.clone(),
         config,
         pipeline,
         cargo: Mutex::new(()),
-        warming,
-        pending: AtomicBool::new(false),
-        change_gen,
+        spec: Speculation::new(),
+        demand: watch::channel(0_u64).0,
         wake_warmup: Notify::new(),
         activity: Notify::new(),
         stop: Notify::new(),
@@ -257,43 +253,68 @@ fn on_changes(shared: &Arc<Shared>, paths: &[PathBuf]) {
         relevant = true;
     }
     if relevant {
-        shared.pending.store(true, Ordering::SeqCst);
-        shared.change_gen.send_modify(|g| *g += 1);
-        shared.warming.send_replace(true);
+        shared.spec.on_change();
         shared.wake_warmup.notify_one();
     }
 }
 
-/// Step the warm-up runs: the configured `up_to` capped at `Clippy`, so the
-/// background cargo invocation (and its artifacts) match a real verify.
-fn warmup_step(config: &Config) -> Step {
-    config.up_to.min(Step::Clippy)
+/// Steps verified speculatively after a change: the configured `up_to`
+/// capped at `Clippy` first (what most requests need, and what the compile
+/// artifacts are shared with), then the full `up_to` when it is higher.
+fn stages(config: &Config) -> Vec<Step> {
+    let first = config.up_to.min(Step::Clippy);
+    if config.up_to > first {
+        vec![first, config.up_to]
+    } else {
+        vec![first]
+    }
 }
 
-/// Runs one background warm-up per burst of changes.
+/// How long a request waits for an in-flight speculative run before it stops
+/// attaching and runs by itself.
+const ATTACH_TIMEOUT: Duration = Duration::from_secs(20 * 60);
+
+/// Runs one speculative verification per burst of changes.
 async fn warmup_worker(shared: Arc<Shared>) {
     loop {
         shared.wake_warmup.notified().await;
-        while shared.pending.swap(false, Ordering::SeqCst) {
-            if let Err(e) = warm_up(&shared).await {
-                tracing::warn!("warm-up failed: {e}");
+        while shared.spec.take_pending() {
+            if let Err(e) = speculate(&shared).await {
+                tracing::warn!("speculative verification failed: {e}");
             }
         }
-        shared.warming.send_replace(false);
+        shared.spec.finish();
         shared.activity.notify_one();
     }
 }
 
-/// One warm-up: the compile step at [`warmup_step`] (result cached under that
-/// step's key), then, when `up_to == Test`, `Runner::prebuild_tests`.
+/// What ended a speculative stage.
+enum StageEnd {
+    Finished(Result<VerifyResult, CoreError>),
+    /// A newer change arrived: the tree this run was verifying is gone.
+    Superseded,
+    /// A request needs cargo now.
+    Yielded,
+}
+
+/// Verifies the current tree in the background, stage by stage, storing each
+/// result in the cache under the key of the tree it was computed for.
 ///
-/// The prebuild is abandoned (its cargo is killed on drop) as soon as a newer
-/// change arrives, so a long prebuild cannot starve the next round. The
-/// duration is appended to the stats as `source = "daemon-warmup"` with a
-/// minimal [`CompactReport`] (`estimated_tokens = 0`, empty `text`/`json`).
-async fn warm_up(shared: &Arc<Shared>) -> Result<(), CoreError> {
+/// The run is abandoned (its cargo is killed on drop) as soon as a newer
+/// change arrives or a request needs cargo, so a long run cannot starve the
+/// next round. A result is stored only if the tree's cache key is the same
+/// before and after the run; see `speculate` for the full argument. Each
+/// stage appends a `source = "daemon-warmup"` stats record with a minimal
+/// [`CompactReport`] (`estimated_tokens = 0`, empty `text`/`json`).
+async fn speculate(shared: &Arc<Shared>) -> Result<(), CoreError> {
+    let generation = shared.spec.generation();
+    let mut demand = shared.demand.subscribe();
+    demand.mark_unchanged();
     let _cargo = shared.cargo.lock().await;
-    let started = Instant::now();
+    if shared.spec.generation() != generation {
+        // A newer change is already queued; do not verify a stale tree.
+        return Ok(());
+    }
     let root = shared.root.clone();
     let detector = Arc::clone(shared);
     let impact = tokio::task::spawn_blocking(move || {
@@ -303,54 +324,116 @@ async fn warm_up(shared: &Arc<Shared>) -> Result<(), CoreError> {
     .await
     .map_err(|e| process_error(e.to_string()))??;
     if impact.is_empty() {
+        shared.spec.mark_ready(generation, Step::Test);
         return Ok(());
     }
-    let step = warmup_step(&shared.config);
+    let Some(cache) = &shared.pipeline.cache else {
+        return Ok(());
+    };
     let build = &shared.pipeline.build;
-    tracing::info!("warm-up: compiling up to {step:?}");
-    let mut result = shared
-        .pipeline
-        .runner
-        .run(&shared.root, &impact, step, build)
-        .await?;
-    if let Some(cache) = &shared.pipeline.cache {
-        match cache.key(&shared.root, &impact, step, build) {
+
+    for step in stages(&shared.config) {
+        let started = Instant::now();
+        let key_before = cache.key(&shared.root, &impact, step, build)?;
+        if let Ok(Some(hit)) = cache.get(&key_before) {
+            tracing::debug!("speculation: {step:?} already cached");
+            if !finish_stage(shared, generation, step, &hit) {
+                break;
+            }
+            continue;
+        }
+        tracing::info!("speculation: verifying up to {step:?}");
+        let end = tokio::select! {
+            r = shared.pipeline.runner.run(&shared.root, &impact, step, build) => StageEnd::Finished(r),
+            () = shared.spec.changed_since(generation) => StageEnd::Superseded,
+            _ = demand.changed() => StageEnd::Yielded,
+        };
+        let mut result = match end {
+            StageEnd::Finished(r) => r?,
+            StageEnd::Superseded => {
+                tracing::info!("speculation: new change arrived, abandoning the run");
+                return Ok(());
+            }
+            StageEnd::Yielded => {
+                tracing::info!("speculation: yielding cargo to a request");
+                shared.spec.requeue();
+                return Ok(());
+            }
+        };
+        result.cache_hit = false;
+        result.total_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let key_after = cache.key(&shared.root, &impact, step, build)?;
+        if key_after != key_before || shared.spec.generation() != generation {
+            tracing::info!("speculation: the tree changed during the run, discarding it");
+            return Ok(());
+        }
+        if is_tool_failure(&result) {
+            tracing::debug!("speculation: not caching a cargo failure");
+            break;
+        }
+        store_derived(shared, &impact, step, &result);
+        record_stats(shared, &result, step);
+        if !finish_stage(shared, generation, step, &result) {
+            break;
+        }
+    }
+    Ok(())
+}
+
+/// Marks `step` ready for the tree of `generation`. A failure also covers
+/// every higher step, so it ends the stages: returns whether to go on.
+fn finish_stage(shared: &Shared, generation: u64, step: Step, result: &VerifyResult) -> bool {
+    if result.outcome.is_pass() {
+        shared.spec.mark_ready(generation, step);
+        true
+    } else {
+        shared.spec.mark_ready(generation, Step::Test);
+        false
+    }
+}
+
+/// Stores `result` (obtained by running up to `ran`) under the cache key of
+/// every step it answers.
+fn store_derived(shared: &Shared, impact: &ImpactSet, ran: Step, result: &VerifyResult) {
+    let Some(cache) = &shared.pipeline.cache else {
+        return;
+    };
+    let build = &shared.pipeline.build;
+    for wanted in Step::ALL {
+        let Some(derived) = derive(result, ran, wanted) else {
+            continue;
+        };
+        match cache.key(&shared.root, impact, wanted, build) {
             Ok(key) => {
-                if let Err(e) = cache.put(&key, &result) {
-                    tracing::warn!("warm-up cache store failed: {e}");
+                if let Err(e) = cache.put(&key, &derived) {
+                    tracing::warn!("speculation cache store failed: {e}");
                 }
             }
-            Err(e) => tracing::warn!("warm-up cache key failed: {e}"),
+            Err(e) => tracing::warn!("speculation cache key failed: {e}"),
         }
     }
-    if shared.config.up_to == Step::Test && result.outcome.is_pass() {
-        let mut changes = shared.change_gen.subscribe();
-        changes.mark_unchanged();
-        tracing::info!("warm-up: prebuilding test binaries");
-        tokio::select! {
-            built = shared.pipeline.runner.prebuild_tests(&shared.root, &impact, build) => {
-                if let Err(e) = built {
-                    tracing::warn!("warm-up prebuild failed: {e}");
-                }
-            }
-            _ = changes.changed() => {
-                tracing::info!("warm-up: new change arrived, abandoning prebuild");
-            }
+}
+
+fn record_stats(shared: &Shared, result: &VerifyResult, step: Step) {
+    tracing::info!(
+        "speculation: {step:?} finished in {} ms ({})",
+        result.total_ms,
+        if result.outcome.is_pass() {
+            "pass"
+        } else {
+            "fail"
         }
-    }
-    result.total_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-    tracing::info!("warm-up finished in {} ms", result.total_ms);
+    );
     let report = CompactReport {
         text: String::new(),
         json: serde_json::Value::Null,
         estimated_tokens: 0,
         truncated: false,
     };
-    let record = orq_core::stats::StatsRecord::new(&result, &report, step, true, "daemon-warmup");
+    let record = orq_core::stats::StatsRecord::new(result, &report, step, true, "daemon-warmup");
     if let Err(e) = orq_core::stats::append(&shared.root, &record) {
         tracing::warn!("warm-up stats failed: {e}");
     }
-    Ok(())
 }
 
 async fn handle_connection(shared: &Arc<Shared>, stream: UnixStream) {
@@ -402,7 +485,7 @@ async fn respond(shared: &Arc<Shared>, request: DaemonRequest) -> (DaemonRespons
                 pid: std::process::id(),
                 uptime_ms: u64::try_from(shared.started.elapsed().as_millis()).unwrap_or(u64::MAX),
                 requests: shared.requests.load(Ordering::SeqCst),
-                warming: *shared.warming.borrow(),
+                warming: shared.spec.running(),
             }),
             false,
         ),
@@ -414,14 +497,26 @@ async fn respond(shared: &Arc<Shared>, request: DaemonRequest) -> (DaemonRespons
     }
 }
 
-/// Waits for an in-flight warm-up, then verifies with exclusive cargo access.
+/// Answers a verify request: from the cache when speculation (or an earlier
+/// request) already verified this exact tree, otherwise by running cargo.
+///
+/// A request first attaches to the speculative run in flight, if there is
+/// one, instead of starting a second run. Whatever the speculation did, the
+/// answer comes from the content-keyed cache, so a result for a different
+/// tree is never returned.
 async fn verify(shared: &Arc<Shared>, request: &VerifyRequest) -> DaemonResponse {
-    let mut warming = shared.warming.subscribe();
-    if warming.wait_for(|w| !*w).await.is_err() {
-        return DaemonResponse::Error {
-            message: "daemon is shutting down".into(),
-        };
+    if tokio::time::timeout(ATTACH_TIMEOUT, shared.spec.attach(request.up_to))
+        .await
+        .is_err()
+    {
+        tracing::warn!("speculative run did not finish within {ATTACH_TIMEOUT:?}");
     }
+    if request.use_cache {
+        if let Some(hit) = cached(shared, request).await {
+            return DaemonResponse::Verify(hit);
+        }
+    }
+    shared.demand.send_modify(|d| *d += 1);
     let _cargo = shared.cargo.lock().await;
     match shared.pipeline.verify(request).await {
         Ok(result) => DaemonResponse::Verify(result),
@@ -429,6 +524,33 @@ async fn verify(shared: &Arc<Shared>, request: &VerifyRequest) -> DaemonResponse
             message: e.to_string(),
         },
     }
+}
+
+/// The cached result for `request`'s current tree, if any. Needs no cargo,
+/// so it never waits for the cargo lock.
+async fn cached(shared: &Arc<Shared>, request: &VerifyRequest) -> Option<VerifyResult> {
+    let shared = Arc::clone(shared);
+    let request = request.clone();
+    tokio::task::spawn_blocking(move || {
+        let started = Instant::now();
+        let cache = shared.pipeline.cache.as_ref()?;
+        let root = &request.root;
+        let changes = match &request.changes {
+            Some(changes) => changes.clone(),
+            None => shared.pipeline.analyzer.detect_changes(root).ok()?,
+        };
+        let impact = shared.pipeline.analyzer.analyze(root, &changes).ok()?;
+        let build = request.build.as_ref().unwrap_or(&shared.pipeline.build);
+        let key = cache.key(root, &impact, request.up_to, build).ok()?;
+        let mut hit = cache.get(&key).ok()??;
+        hit.cache_hit = true;
+        hit.impact = impact;
+        hit.total_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        Some(hit)
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 fn parse_request(line: &str) -> Result<DaemonRequest, String> {

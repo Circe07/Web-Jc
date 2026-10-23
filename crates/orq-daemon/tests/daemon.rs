@@ -320,3 +320,158 @@ async fn change_during_warmup_does_not_deadlock() {
     }
     stop(&root, handle).await;
 }
+
+async fn wait_until_warming(root: &Path) {
+    for _ in 0..400 {
+        if let Some(DaemonResponse::Status(s)) = request(root, DaemonRequest::Status).await.unwrap()
+        {
+            if s.warming {
+                return;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("the daemon never started verifying");
+}
+
+async fn wait_until_idle(root: &Path) {
+    for _ in 0..1200 {
+        if let Some(DaemonResponse::Status(s)) = request(root, DaemonRequest::Status).await.unwrap()
+        {
+            if !s.warming {
+                return;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("the daemon never went idle");
+}
+
+fn cached_request(root: &Path, up_to: Step) -> DaemonRequest {
+    DaemonRequest::Verify(VerifyRequest {
+        root: root.to_path_buf(),
+        up_to,
+        use_cache: true,
+        ..VerifyRequest::default()
+    })
+}
+
+async fn verify_result(root: &Path, up_to: Step) -> orq_core::VerifyResult {
+    let answer = tokio::time::timeout(
+        Duration::from_secs(300),
+        request(root, cached_request(root, up_to)),
+    )
+    .await
+    .expect("verify must return");
+    match answer.unwrap() {
+        Some(DaemonResponse::Verify(result)) => result,
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn speculation_runs_the_full_ladder_and_verify_is_served_from_it() {
+    let (_dir, root) = fixture();
+    let handle = start(&root, DaemonOptions::default());
+    wait_ready(&root).await;
+
+    let lib = root.join("crates/leaf/src/lib.rs");
+    let original = std::fs::read_to_string(&lib).unwrap();
+    std::fs::write(&lib, format!("{original}\n// spec\n")).unwrap();
+    wait_until_warming(&root).await;
+    wait_until_idle(&root).await;
+
+    // Both stages ran: clippy, then test.
+    let steps: Vec<Step> = warmup_records(&root).iter().map(|r| r.up_to).collect();
+    assert_eq!(steps, vec![Step::Clippy, Step::Test]);
+
+    // Every step of the ladder answers from the cache, with no cargo.
+    for step in Step::ALL {
+        let result = verify_result(&root, step).await;
+        assert!(result.outcome.is_pass(), "{step:?}: {result:?}");
+        assert!(result.cache_hit, "{step:?} should be a cache hit");
+        assert_eq!(result.steps.last().map(|s| s.step), Some(step));
+    }
+    stop(&root, handle).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn verify_during_speculation_attaches_instead_of_running_twice() {
+    let (_dir, root) = fixture();
+    let handle = start(&root, DaemonOptions::default());
+    wait_ready(&root).await;
+
+    let lib = root.join("crates/leaf/src/lib.rs");
+    let original = std::fs::read_to_string(&lib).unwrap();
+    std::fs::write(&lib, format!("{original}\n// attach\n")).unwrap();
+    wait_until_warming(&root).await;
+
+    // Arrives while the speculative run is in flight.
+    let result = verify_result(&root, Step::Test).await;
+    assert!(result.outcome.is_pass(), "{result:?}");
+    assert!(result.cache_hit, "expected the in-flight run's result");
+    stop(&root, handle).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn change_during_speculation_never_yields_a_stale_result() {
+    let (_dir, root) = fixture();
+    let handle = start(&root, DaemonOptions::default());
+    wait_ready(&root).await;
+
+    let lib = root.join("crates/leaf/src/lib.rs");
+    let original = std::fs::read_to_string(&lib).unwrap();
+    // First tree: valid. The speculative run starts on it...
+    std::fs::write(&lib, format!("{original}\n// valid\n")).unwrap();
+    wait_until_warming(&root).await;
+    // ...and a newer tree arrives mid-run: it does not compile.
+    std::fs::write(
+        &lib,
+        format!("{original}\nfn broken() -> u32 {{ \"x\" }}\n"),
+    )
+    .unwrap();
+
+    let result = verify_result(&root, Step::Test).await;
+    assert_eq!(
+        result.outcome,
+        orq_core::Outcome::Fail {
+            failed_step: Step::Check
+        },
+        "answered for the wrong tree: {result:?}"
+    );
+
+    // Back to a valid tree: the pass is for this tree, not a replay.
+    std::fs::write(&lib, format!("{original}\n// valid again\n")).unwrap();
+    let result = verify_result(&root, Step::Test).await;
+    assert!(result.outcome.is_pass(), "{result:?}");
+    stop(&root, handle).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn failing_speculation_is_replayed_for_every_step_it_covers() {
+    let (_dir, root) = fixture();
+    let handle = start(&root, DaemonOptions::default());
+    wait_ready(&root).await;
+
+    let lib = root.join("crates/leaf/src/lib.rs");
+    let original = std::fs::read_to_string(&lib).unwrap();
+    std::fs::write(
+        &lib,
+        format!("{original}\nfn broken() -> u32 {{ \"x\" }}\n"),
+    )
+    .unwrap();
+    wait_until_warming(&root).await;
+    wait_until_idle(&root).await;
+
+    for step in [Step::Check, Step::Clippy, Step::Test] {
+        let result = verify_result(&root, step).await;
+        assert_eq!(
+            result.outcome,
+            orq_core::Outcome::Fail {
+                failed_step: Step::Check
+            }
+        );
+        assert!(result.cache_hit, "{step:?} should be a cache hit");
+    }
+    stop(&root, handle).await;
+}
