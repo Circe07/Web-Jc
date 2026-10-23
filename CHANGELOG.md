@@ -16,8 +16,20 @@ All notable changes to this project are documented here. The format follows
     with orq's report versus raw cargo output. It works with Claude or with
     Gemini's free tier (`--provider gemini`, `GEMINI_API_KEY`).
 - `deny_warnings` in `orq.toml`: clippy runs with `-D warnings`.
+- Six harder evaluation cases (28 in total), aimed at multi-turn fixes.
+- Agent harness: `--transcripts DIR` saves each conversation, and the report
+  shows time per run split into model and checker.
+
+### Changed
+- Suggestions now show the source line with the edit applied, its line
+  number and rustc's help text, instead of a bare fragment such as
+  `: std::cmp::Ord`.
 
 ### Fixed
+- Agent harness: a relative `--orq` path works; time no longer counts the
+  waits for the Gemini rate limit, and each mode is timed with its own
+  checker; orq mode denies clippy warnings like the judge, so a warning no
+  longer reads as `PASS` to the agent while the run fails.
 - A pass with warnings used to hide them. The `PASS` line now carries the
   warning count, and the warnings are listed below it within the budget.
 - `orq.toml` is part of the cache key, so changing it no longer replays an

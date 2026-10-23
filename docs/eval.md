@@ -66,7 +66,8 @@ Options: `--cases DIR` (default `eval/cases`), `--case ID...`, `--modes raw,orq`
 `--max-turns 4`, `--budget 1500` (orq report budget), `--model`,
 `--provider auto|anthropic|gemini`, `--rpm 8` (Gemini only), `--effort`
 (`low|medium|high|xhigh|max`), `--no-fallbacks`, `--orq PATH`,
-`--out eval/results/agent`, `--mock`, `--repeat N`.
+`--out eval/results/agent`, `--transcripts DIR` (save each conversation), `--mock`,
+`--repeat N`.
 
 Models: `claude-opus-5-5` (default), `claude-sonnet-5-5`, `claude-haiku-5-5`.
 Server-side refusal fallbacks are requested by default for Opus and Sonnet and
@@ -89,13 +90,19 @@ often (check the rate-limit page in AI Studio). So that a run fits:
 - a per-minute 429 or a 5xx is retried with backoff;
 - a per-day 429 stops the run cleanly, and the report notes it.
 
-A full run (22 cases × 2 modes, 1–4 turns each) makes about 60–120 calls.
+A full run (28 cases × 2 modes, 1–4 turns each) makes about 80–150 calls.
 Run a subset with `--case` if the daily quota is lower than that. `--effort`
 and the refusal fallbacks are Claude-only and are ignored. Cost is not
 estimated for Gemini (free tier).
 
 Free-tier prompts may be used by Google to improve its products. The corpus
 holds only the toy projects in `eval/cases/`, so nothing private is sent.
+
+Time per run is the workflow's own: model calls plus its checker (cargo in raw
+mode, orq in orq mode, including the final passing check). Rate-limit waits
+and the cargo runs that judge orq mode are left out. In orq mode the harness
+sets `deny_warnings = true` in the run's copy of the case (unless the case
+sets it), so orq fails on clippy warnings exactly when the judge does.
 
 Tests of the harness itself (no API): `python3 -m unittest discover -s eval/agent`
 (needs `target/release/orq`, or set `ORQ_BIN`).

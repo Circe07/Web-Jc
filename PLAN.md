@@ -369,6 +369,22 @@ Base preparada por el líder: el contrato de casos en `eval/README.md`, dos caso
 
 **T6.3 Arnés con agente** (`eval/agent/`): bucle con Claude (SDK oficial de Python) en los modos `raw` y `orq`, con `--mock` para probarlo sin clave. Mide éxito, turnos y tokens. Incluye un workflow manual con el secreto `ANTHROPIC_API_KEY` y `docs/eval.md`.
 
+### Oleada 7 — Prueba con un modelo real y arreglos que salieron de ella (líder) · cerrada 2026-10-23
+
+Primera ejecución del arnés contra un modelo real (Gemini Flash-Lite, plan gratuito). Cada fallo que encontró se arregló y se volvió a medir.
+
+**Hecho:**
+- **6 casos más difíciles** (corpus: 22 → 28), pensados para pedir varios turnos y dar mucha salida a cargo: errores por fases (check → clippy → test), `Rc` entre hilos, cascada de *bounds* genéricos, *lifetimes* en struct + `Iterator`, cambio de API que rompe 2 de 3 crates y 2 bugs de lógica con 4 tests fallando.
+- **Sugerencias con contexto** (`orq-runner`): antes salía el fragmento suelto de rustc (`suggestion: : std::cmp::Ord`); ahora sale la línea ya corregida, su número y el motivo, con el código primero para que el recorte no se lo coma.
+- **Tiempos del arnés**: separa modelo, cargo, orq y esperas del límite de Gemini. Cada modo cuenta solo su propio verificador (cargo en raw, orq en orq, incluida la verificación final), y las esperas no cuentan.
+- **`--transcripts DIR`**: guarda cada conversación completa para ver por qué falla un turno.
+- **Mismo criterio que el juez**: el juez usa `clippy -D warnings`, pero orq solo lo hacía con `deny_warnings = true`, que tenía un único caso. orq decía `PASS` con un aviso y el juez lo daba por fallido, así que el agente perdía un turno. En modo orq el arnés activa ahora `deny_warnings` en la copia del caso.
+- `--orq` con ruta relativa ya funciona (el arnés trabaja en un directorio temporal).
+
+**Pendiente:**
+- `workspace-three-crates-api` no lo resuelve ningún modo en 4 turnos: revisar con las transcripciones si el caso es demasiado puntilloso (alineación exacta del informe) o si falta información.
+- Repetir la prueba con más repeticiones y con un modelo más fuerte, para que el ruido de latencia de la API pese menos.
+
 ---
 
 ## 6. Fixtures (`fixtures/`)

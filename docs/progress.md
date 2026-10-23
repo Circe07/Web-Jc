@@ -297,3 +297,55 @@ Open items:
   It respects the per-minute limit and stops cleanly when the daily quota is
   used up. The run is started by hand from the `eval` workflow.
 - `StatsRecord.raw_tokens`, and named pipes on Windows (carried over).
+
+## Wave 7 — First run against a real model, and the fixes it led to · closed 2026-10-23
+
+The agent harness ran for the first time against a real model (Gemini
+`gemini-flash-lite-latest`, free tier). Every problem it surfaced was fixed
+and measured again.
+
+| Change | Where |
+| --- | --- |
+| 6 harder cases (corpus 22 → 28): `staged-errors-ladder`, `thread-shared-counter`, `generic-bounds-cascade`, `lifetime-struct-iterator`, `workspace-three-crates-api`, `many-failing-tests-two-bugs`. They aim at multi-turn fixes and long cargo output. All pass `eval/validate.sh`. | `eval/cases/` |
+| Suggestions in context: the line with the edits applied, its number and rustc's help text, instead of a bare fragment such as `: std::cmp::Ord`. | `orq-runner` (`messages.rs`) |
+| Time breakdown per run (model, cargo, orq, deliberate waits). Each mode is timed with its own checker; rate-limit waits are left out. | `eval/agent/agent_eval.py` |
+| `--transcripts DIR` saves every conversation. | `eval/agent/agent_eval.py` |
+| orq mode denies warnings like the judge does. | `eval/agent/agent_eval.py` |
+| A relative `--orq` path is resolved up front. | `eval/agent/agent_eval.py` |
+
+Bugs found by the real run, fixed by the lead:
+1. **A relative `--orq` path failed every orq run** (`No such file or
+   directory`), because each run works in a temp dir.
+2. **Suggestions without context.** rustc's suggested replacement is often an
+   insertion (`: Ord`, `+ Clone`). orq printed it alone, with no line and no
+   reason.
+3. **Unfair timing.** Wall time included the waits for Gemini's per-minute
+   limit, and orq mode was charged for cargo (the harness's judge) and orq
+   on every turn.
+4. **orq and the judge disagreed on clippy warnings.** The judge runs
+   `clippy -- -D warnings`; orq only does with `deny_warnings = true`, which
+   one case set. In `staged-errors-ladder` orq said `PASS` with a warning
+   listed, the judge failed the run, and the agent spent a second turn. The
+   transcripts showed it.
+
+Agent results, 9 cases × 3 repeats per mode (before fix 4):
+
+| Mode | Fixed | Mean turns | Mean tokens | Feedback tokens/turn | Mean time | Model | Checker |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| raw | 24/27 | 1.33 | 3981 | 735 | 9.2 s | 8.0 s | 1.2 s |
+| orq | 24/27 | 1.48 | 3581 | 241 | 10.6 s | 9.5 s | 1.2 s |
+
+- orq sends about 3× fewer feedback tokens and 10% fewer tokens in total.
+- One check costs the same: 0.47 s with orq, 0.51 s with cargo.
+- orq was slower overall because of extra turns (40 vs 36), part of them from
+  bug 4, and because Gemini's latency varied a lot (1.3–16 s per call).
+- In `generic-bounds-cascade` one extra orq turn came from the model
+  deleting an import on its own; with the same report, the other runs fixed
+  it in one turn.
+
+Open items:
+- `workspace-three-crates-api` is fixed by neither mode in 4 turns. Check
+  the transcripts: the exact padding the test expects may be too fussy, or
+  something may be missing from the feedback.
+- Run again with more repeats and a stronger model, so API latency noise
+  weighs less.
