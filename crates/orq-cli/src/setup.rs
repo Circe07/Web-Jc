@@ -11,7 +11,7 @@
 //! * Cranelift is opt-in (`--cranelift`): stable cargo rejects `[unstable]`
 //!   and the `codegen-backend` profile key, so writing it by default could
 //!   break `cargo check` for a user on the stable toolchain.
-//! * Linker (mold/wild) and sccache are not per-profile in cargo config, so
+//! * Linker (mold/wild, each a commented alternative) and sccache are not per-profile in cargo config, so
 //!   they are only emitted as commented-out hints inside the managed block;
 //!   release builds are never touched.
 //! * The managed block (`# >>> orq setup >>>` ... `# <<< orq setup <<<`) is
@@ -301,16 +301,25 @@ pub fn propose(existing: &str, found: &Detected, cranelift: bool) -> Result<Prop
         block,
         "# config and would also affect release builds. Uncomment deliberately."
     );
-    if found.mold || found.wild {
-        let linker = if found.mold { "mold" } else { "wild" };
-        let _ = writeln!(block, "# [target.x86_64-unknown-linux-gnu]");
-        let _ = writeln!(block, "# linker = \"clang\"");
-        let _ = writeln!(
-            block,
-            "# rustflags = [\"-C\", \"link-arg=-fuse-ld={linker}\"]"
-        );
+    // Each linker is its own alternative: enable one at most. mold is a
+    // `-fuse-ld` name for clang; wild is selected by path (`--ld-path`).
+    let linker_flags = [
+        (found.mold, "mold", "-fuse-ld=mold"),
+        (found.wild, "wild", "--ld-path=wild"),
+    ];
+    for (present, name, flag) in linker_flags {
+        if present {
+            let _ = writeln!(block, "# Linker alternative: {name}");
+            let _ = writeln!(block, "# [target.x86_64-unknown-linux-gnu]");
+            let _ = writeln!(block, "# linker = \"clang\"");
+            let _ = writeln!(block, "# rustflags = [\"-C\", \"link-arg={flag}\"]");
+        }
     }
     if found.sccache {
+        let _ = writeln!(
+            block,
+            "# Compiler cache (or per shell: RUSTC_WRAPPER=sccache):"
+        );
         let _ = writeln!(block, "# [build]");
         let _ = writeln!(block, "# rustc-wrapper = \"sccache\"");
     }
@@ -398,7 +407,9 @@ fn install_hints(found: &Detected, out: &mut dyn Write) -> Result<()> {
         );
     }
     if !found.mold && !found.wild {
-        missing.push("sudo apt install mold   # or your distro's package manager; or `wild`");
+        missing.push(
+            "cargo install wild-linker --locked   # fast linker (or `mold` from your distro)",
+        );
     }
     if !found.sccache {
         missing.push("cargo install sccache --locked   # compiler cache");
@@ -546,6 +557,29 @@ mod tests {
         let t = ready(propose("", &found, false).unwrap());
         assert!(t.contains("# rustflags = [\"-C\", \"link-arg=-fuse-ld=mold\"]"));
         assert!(t.contains("# rustc-wrapper = \"sccache\""));
+        let doc: toml::Table = t.parse().unwrap();
+        assert!(doc.get("target").is_none() && doc.get("build").is_none());
+    }
+
+    #[test]
+    fn wild_hint_uses_ld_path_and_both_linkers_are_alternatives() {
+        let found = Detected {
+            wild: true,
+            sccache: true,
+            ..none()
+        };
+        let t = ready(propose("", &found, false).unwrap());
+        assert!(t.contains("# rustflags = [\"-C\", \"link-arg=--ld-path=wild\"]"));
+        assert!(!t.contains("fuse-ld=mold"));
+        assert!(t.contains("RUSTC_WRAPPER=sccache"));
+        let both = Detected {
+            mold: true,
+            wild: true,
+            ..none()
+        };
+        let t = ready(propose("", &both, false).unwrap());
+        assert!(t.contains("fuse-ld=mold") && t.contains("--ld-path=wild"));
+        // still only comments: nothing outside the dev profile is enabled
         let doc: toml::Table = t.parse().unwrap();
         assert!(doc.get("target").is_none() && doc.get("build").is_none());
     }
