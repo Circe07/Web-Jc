@@ -85,6 +85,10 @@ pub struct VerifyArgs {
     /// Target triple to build for.
     #[arg(long)]
     pub target: Option<String>,
+    /// Apply the machine-applicable rustc/clippy fixes to the affected crates
+    /// before verifying; the report says which files orq changed.
+    #[arg(long)]
+    pub fix: bool,
     /// Never delegate to a daemon (also `ORQ_NO_DAEMON=1`).
     #[arg(long, hide = true)]
     pub no_daemon: bool,

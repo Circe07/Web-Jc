@@ -24,6 +24,8 @@ use orq_core::{root, stats, ChangeSet, Compressor, Config, Step, VerifyRequest};
 use orq_daemon::client::{self, Mode};
 use serde_json::{json, Value};
 
+use crate::fix;
+
 /// Default ladder depth of the hook: `check` keeps the feedback loop fast;
 /// clippy and tests run when the agent calls `orq verify` / the MCP tool.
 const DEFAULT_UP_TO: Step = Step::Check;
@@ -43,6 +45,20 @@ pub struct HookArgs {
     /// Token budget of the report fed back to Claude. Default 600.
     #[arg(long)]
     pub budget: Option<usize>,
+    /// Apply the machine-applicable rustc/clippy fixes to the affected crates
+    /// before verifying (also `ORQ_HOOK_FIX=1`). Off by default: it edits
+    /// files and runs clippy after every edit. When it changes files, the
+    /// agent is told which.
+    #[arg(long)]
+    pub fix: bool,
+}
+
+/// `true` if the hook should fix before verifying: the flag, or
+/// `ORQ_HOOK_FIX` set to `1` / `true`.
+fn fix_enabled(args: &HookArgs) -> bool {
+    args.fix
+        || std::env::var("ORQ_HOOK_FIX")
+            .is_ok_and(|v| matches!(v.trim(), "1" | "true" | "TRUE" | "True"))
 }
 
 /// Runs `orq hook` and returns the exit code. Never fails: internal errors
@@ -142,14 +158,6 @@ fn handle(args: &HookArgs, input: &str) -> Result<Option<String>> {
 
     let up_to = args.up_to.unwrap_or(DEFAULT_UP_TO);
     let budget = args.budget.unwrap_or(DEFAULT_BUDGET);
-    let request = VerifyRequest {
-        root: root.clone(),
-        changes: Some(ChangeSet { files: relative }),
-        up_to,
-        token_budget: budget,
-        use_cache: true,
-        build: None,
-    };
     let mode = if std::env::var_os("ORQ_NO_DAEMON").is_some_and(|v| v == "1") {
         Mode::InProcess
     } else {
@@ -159,9 +167,33 @@ fn handle(args: &HookArgs, input: &str) -> Result<Option<String>> {
         .enable_all()
         .build()
         .context("building tokio runtime")?;
+
+    let changes = ChangeSet { files: relative };
+    let mut note: Option<String> = None;
+    if fix_enabled(args) && up_to != Step::Fmt {
+        // A failure to fix must not hide the verification: log and go on.
+        match runtime.block_on(fix::fix_first(
+            &root,
+            &config,
+            Some(changes.clone()),
+            &config.build,
+        )) {
+            Ok((_, outcome)) => note = outcome.summary(),
+            Err(e) => tracing::warn!("orq hook: could not apply fixes: {e:#}"),
+        }
+    }
+    let report_budget = fix::budget_after_note(budget, note.as_deref());
+    let request = VerifyRequest {
+        root: root.clone(),
+        changes: Some(changes),
+        up_to,
+        token_budget: report_budget,
+        use_cache: true,
+        build: None,
+    };
     let verified = runtime.block_on(client::verify(&request, &config, mode))?;
     let result = verified.result;
-    let report = LlmCompressor::new(config.lang).compress(&result, budget);
+    let report = LlmCompressor::new(config.lang).compress(&result, report_budget);
 
     let record = stats::StatsRecord::new(&result, &report, up_to, verified.via_daemon, "hook");
     if let Err(e) = stats::append(&root, &record) {
@@ -169,11 +201,20 @@ fn handle(args: &HookArgs, input: &str) -> Result<Option<String>> {
     }
 
     if result.outcome.is_pass() {
-        return Ok(None);
+        // Passing, but orq edited files: the agent must know.
+        return Ok(note.map(|note| {
+            json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PostToolUse",
+                    "additionalContext": format!("orq: {note}"),
+                }
+            })
+            .to_string()
+        }));
     }
     let reason = format!(
         "orq verify failed after your edit:\n{}",
-        report.text.trim_end()
+        fix::with_note(note.as_deref(), &report.text)
     );
     Ok(Some(
         json!({
@@ -225,6 +266,7 @@ mod tests {
             root: None,
             up_to: None,
             budget: None,
+            fix: false,
         };
         assert!(handle(&args, "not json").is_err());
         assert!(handle(&args, "{}").unwrap().is_none());

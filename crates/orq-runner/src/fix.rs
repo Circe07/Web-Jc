@@ -29,6 +29,34 @@ pub struct FixOutcome {
     pub cargo_ok: bool,
 }
 
+/// Most file names listed by [`FixOutcome::summary`].
+const SUMMARY_FILES: usize = 3;
+
+impl FixOutcome {
+    /// One short line telling the agent which files orq edited, such as
+    /// `fixed: 2 files (src/a.rs, src/b.rs)`; `None` when nothing changed.
+    ///
+    /// Lint names are not part of it: `cargo clippy --fix` does not say which
+    /// lint produced each edit.
+    pub fn summary(&self) -> Option<String> {
+        if self.files_changed.is_empty() {
+            return None;
+        }
+        let n = self.files_changed.len();
+        let mut names: Vec<String> = self
+            .files_changed
+            .iter()
+            .take(SUMMARY_FILES)
+            .map(|p| p.display().to_string())
+            .collect();
+        if n > SUMMARY_FILES {
+            names.push(format!("+{}", n - SUMMARY_FILES));
+        }
+        let noun = if n == 1 { "file" } else { "files" };
+        Some(format!("fixed: {n} {noun} ({})", names.join(", ")))
+    }
+}
+
 /// Applies machine-applicable fixes to the crates of `impact` (the whole
 /// workspace on `full_rebuild`).
 ///
@@ -147,5 +175,44 @@ fn walk(root: &Path, dir: &Path, map: &mut BTreeMap<PathBuf, [u8; 32]>) {
                 map.insert(rel, *blake3::hash(&bytes).as_bytes());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn outcome(files: &[&str]) -> FixOutcome {
+        FixOutcome {
+            files_changed: files.iter().map(PathBuf::from).collect(),
+            cargo_ok: true,
+        }
+    }
+
+    #[test]
+    fn summary_is_none_without_changes() {
+        assert_eq!(outcome(&[]).summary(), None);
+    }
+
+    #[test]
+    fn summary_names_the_files() {
+        assert_eq!(
+            outcome(&["src/a.rs"]).summary().as_deref(),
+            Some("fixed: 1 file (src/a.rs)")
+        );
+        assert_eq!(
+            outcome(&["src/a.rs", "src/b.rs"]).summary().as_deref(),
+            Some("fixed: 2 files (src/a.rs, src/b.rs)")
+        );
+    }
+
+    #[test]
+    fn summary_caps_the_list() {
+        assert_eq!(
+            outcome(&["a.rs", "b.rs", "c.rs", "d.rs", "e.rs"])
+                .summary()
+                .as_deref(),
+            Some("fixed: 5 files (a.rs, b.rs, c.rs, +2)")
+        );
     }
 }

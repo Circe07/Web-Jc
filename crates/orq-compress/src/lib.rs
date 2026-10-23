@@ -23,8 +23,8 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use orq_core::{
-    estimate_tokens, CompactReport, Compressor, Diagnostic, Lang, Outcome, Severity, TestFailure,
-    VerifyResult,
+    estimate_tokens, CompactReport, Compressor, Diagnostic, Lang, Outcome, Severity, Step,
+    TestFailure, VerifyResult,
 };
 use serde_json::{json, Value};
 
@@ -94,6 +94,9 @@ struct Entry<'a> {
     dependency: Option<String>,
     /// Further errors in that dependency folded into this entry.
     more_in_dependency: usize,
+    /// Signature of the workspace item the error talks about, if the runner
+    /// found it (a companion diagnostic right after the error).
+    signature: Option<&'a Diagnostic>,
 }
 
 /// The dependency a diagnostic path points into: `name-version` after
@@ -115,6 +118,14 @@ fn dependency_of(path: &Path) -> Option<String> {
             ("git", "checkouts") => parts.get(i + 2).cloned(),
             _ => None,
         })
+}
+
+/// Code of the companion diagnostic that carries the signature of the item an
+/// error talks about (written by `orq-runner`).
+const SIGNATURE_CODE: &str = "orq::signature";
+
+fn is_signature(d: &Diagnostic) -> bool {
+    d.severity == Severity::Help && d.code.as_deref() == Some(SIGNATURE_CODE)
 }
 
 /// Deduplication key: severity, code, file, line and (only without a code) message.
@@ -139,7 +150,7 @@ impl<'a> Prepared<'a> {
         let mut errors: Vec<Entry<'a>> = Vec::new();
         let mut warnings: Vec<Entry<'a>> = Vec::new();
 
-        for d in &result.diagnostics {
+        for (i, d) in result.diagnostics.iter().enumerate() {
             if !matches!(d.severity, Severity::Error | Severity::Warning) {
                 continue;
             }
@@ -161,6 +172,10 @@ impl<'a> Prepared<'a> {
                 derived_from: None,
                 dependency: d.file.as_deref().and_then(dependency_of),
                 more_in_dependency: 0,
+                signature: result
+                    .diagnostics
+                    .get(i + 1)
+                    .filter(|next| d.severity == Severity::Error && is_signature(next)),
             };
             if d.severity == Severity::Error {
                 errors.push(entry);
@@ -229,6 +244,8 @@ struct Params {
     snippet_lines: usize,
     width: usize,
     suggestions: bool,
+    /// Show the signature of the item an error talks about.
+    signatures: bool,
     warnings: bool,
     max_errors: usize,
     max_tests: usize,
@@ -240,12 +257,16 @@ struct Params {
     counts: bool,
 }
 
+/// Longest signature shown, in chars.
+const SIGNATURE_WIDTH: usize = 160;
+
 /// Rendering attempts from most to least detailed.
 fn candidates(outcome: Outcome, prepared: &Prepared<'_>) -> Vec<Params> {
     let full = Params {
         snippet_lines: 8,
         width: 120,
         suggestions: true,
+        signatures: true,
         warnings: true,
         max_errors: usize::MAX,
         max_tests: usize::MAX,
@@ -269,6 +290,34 @@ fn candidates(outcome: Outcome, prepared: &Prepared<'_>) -> Vec<Params> {
             });
         }
         return out;
+    }
+    // Signatures are extra context, not the error itself: first to go.
+    let full = if prepared.errors.iter().any(|e| e.signature.is_some()) {
+        let no_sigs = Params {
+            signatures: false,
+            ..full
+        };
+        out.push(no_sigs);
+        no_sigs
+    } else {
+        full
+    };
+    // Lint findings that ride along with compile errors (clippy on the crates
+    // that did compile) come second: they go before the errors lose detail.
+    if matches!(
+        outcome,
+        Outcome::Fail {
+            failed_step: Step::Check
+        }
+    ) && prepared
+        .warnings
+        .iter()
+        .any(|w| w.diag.step == Step::Clippy)
+    {
+        out.push(Params {
+            warnings: false,
+            ..full
+        });
     }
     // Trim snippets.
     out.push(Params {
@@ -637,6 +686,14 @@ fn render_error(index: usize, e: &Entry<'_>, p: &Params, w: &Words) -> (Vec<Stri
             let s = clip(&one_line(s), p.width);
             lines.push(format!("    {} {s}", w.suggestion));
             item["suggestion"] = json!(s);
+        }
+    }
+    if p.signatures {
+        if let Some(sig) = e.signature {
+            let text = clip(&one_line(&sig.message), SIGNATURE_WIDTH);
+            let at = location(sig).map(|l| format!(" ({l})")).unwrap_or_default();
+            lines.push(format!("    {} {text}{at}", w.signature));
+            item["signature"] = json!(text);
         }
     }
     (lines, item)

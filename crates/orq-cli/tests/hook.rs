@@ -142,3 +142,74 @@ fn malformed_stdin_does_not_block() {
         assert!(out.stdout.is_empty(), "input {input:?}");
     }
 }
+
+#[test]
+fn hook_without_fix_never_edits_files() {
+    let (_tmp, root) = copy_fixture("clippy-warn");
+    let file = root.join("src/lib.rs");
+    let before = std::fs::read_to_string(&file).unwrap();
+    let out = hook(&root)
+        .env_remove("ORQ_HOOK_FIX")
+        .write_stdin(payload(&root, "Edit", &file))
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    assert!(out.stdout.is_empty());
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), before);
+}
+
+#[test]
+fn hook_with_fix_edits_and_tells_the_agent() {
+    let (_tmp, root) = copy_fixture("clippy-warn");
+    let file = root.join("src/lib.rs");
+    let out = hook(&root)
+        .arg("--fix")
+        .write_stdin(payload(&root, "Edit", &file))
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let ctx = json["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert_eq!(json["hookSpecificOutput"]["hookEventName"], "PostToolUse");
+    assert!(ctx.contains("fixed: 1 file (src/lib.rs)"), "{ctx}");
+    // A pass is not a block.
+    assert!(json.get("decision").is_none());
+    let source = std::fs::read_to_string(&file).unwrap();
+    assert!(!source.contains("return v.len() == 0"), "{source}");
+}
+
+#[test]
+fn hook_fix_can_be_enabled_with_an_environment_variable() {
+    let (_tmp, root) = copy_fixture("clippy-warn");
+    let file = root.join("src/lib.rs");
+    let out = hook(&root)
+        .env("ORQ_HOOK_FIX", "1")
+        .write_stdin(payload(&root, "Edit", &file))
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(json["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap()
+        .contains("fixed:"));
+}
+
+#[test]
+fn hook_with_fix_on_clean_code_stays_silent() {
+    let (_tmp, root) = copy_fixture("multi");
+    let file = root.join("crates/base/src/lib.rs");
+    let out = hook(&root)
+        .arg("--fix")
+        .write_stdin(payload(&root, "Edit", &file))
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    assert!(out.stdout.is_empty());
+}

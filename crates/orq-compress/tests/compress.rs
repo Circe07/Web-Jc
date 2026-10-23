@@ -421,3 +421,105 @@ fn errors_inside_a_dependency_are_folded() {
     );
     assert!(report.text.contains("src/lib.rs:3"), "{}", report.text);
 }
+
+fn signature_for(error: &Diagnostic, text: &str, file: &str, line: u32) -> Diagnostic {
+    Diagnostic {
+        severity: Severity::Help,
+        code: Some("orq::signature".into()),
+        message: text.into(),
+        file: Some(PathBuf::from(file)),
+        line: Some(line),
+        column: None,
+        snippet: None,
+        label: None,
+        suggestion: None,
+        crate_id: error.crate_id.clone(),
+        step: error.step,
+    }
+}
+
+fn with_signature() -> VerifyResult {
+    let mut e = diag(
+        Severity::Error,
+        Some("E0061"),
+        "this function takes 2 arguments but 1 argument was supplied",
+        "src/main.rs",
+        9,
+    );
+    e.snippet = Some("    add(1);".into());
+    let sig = signature_for(&e, "pub fn add(a: u32, b: u32) -> u32", "src/lib.rs", 3);
+    fail_check(vec![e, sig])
+}
+
+#[test]
+fn signature_is_shown_under_its_error() {
+    let out = LlmCompressor::new(Lang::En).compress(&with_signature(), 1500);
+    assert!(
+        out.text
+            .contains("    sig: pub fn add(a: u32, b: u32) -> u32 (src/lib.rs:3)"),
+        "{}",
+        out.text
+    );
+    assert_eq!(
+        out.json["errors"][0]["signature"],
+        "pub fn add(a: u32, b: u32) -> u32"
+    );
+    assert!(!out.truncated);
+    let es = LlmCompressor::new(Lang::Es).compress(&with_signature(), 1500);
+    assert!(es.text.contains("    firma: pub fn add"), "{}", es.text);
+}
+
+#[test]
+fn signature_is_not_counted_as_a_diagnostic() {
+    let out = LlmCompressor::new(Lang::En).compress(&with_signature(), 1500);
+    assert!(out.text.starts_with("FAIL check (1 error)"), "{}", out.text);
+    assert_eq!(out.json["total"]["warnings"], 0);
+}
+
+#[test]
+fn signature_is_the_first_thing_dropped() {
+    let full = LlmCompressor::new(Lang::En).compress(&with_signature(), 1500);
+    // One token less than the full report: only the signature may go.
+    let tight = LlmCompressor::new(Lang::En).compress(&with_signature(), full.estimated_tokens - 1);
+    assert!(tight.truncated);
+    assert!(!tight.text.contains("sig:"), "{}", tight.text);
+    assert!(tight.text.contains("E0061"), "{}", tight.text);
+    assert!(tight.text.contains("add(1);"), "{}", tight.text);
+}
+
+#[test]
+fn lint_findings_go_before_error_snippets() {
+    let mut ds = Vec::new();
+    for i in 0..3 {
+        ds.push(diag(
+            Severity::Error,
+            Some("E0308"),
+            "mismatched types",
+            "src/a.rs",
+            10 + i * 5,
+        ));
+    }
+    for i in 0..6 {
+        let mut w = diag(
+            Severity::Warning,
+            Some("clippy::needless_return"),
+            "unneeded `return` statement",
+            "src/other.rs",
+            1 + i,
+        );
+        w.step = Step::Clippy;
+        ds.push(w);
+    }
+    let r = fail_check(ds);
+    let full = LlmCompressor::new(Lang::En).compress(&r, 5000);
+    assert!(full.text.contains("[W6]"), "{}", full.text);
+    // Slightly too small for everything: the lints go, the error snippets stay.
+    let tight = LlmCompressor::new(Lang::En).compress(&r, full.estimated_tokens - 1);
+    assert!(tight.truncated);
+    assert!(tight.text.contains("6 warnings hidden"), "{}", tight.text);
+    assert!(
+        tight.text.contains("let id: u64 = req.id;"),
+        "{}",
+        tight.text
+    );
+}

@@ -1,11 +1,13 @@
 //! `orq fix`: apply machine-applicable fixes, then verify (PLAN.md T5.3).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::Args;
 use orq_compress::LlmCompressor;
-use orq_core::{root, stats, ChangeSet, Compressor, Config, ImpactAnalyzer, Step, VerifyRequest};
+use orq_core::{
+    root, stats, BuildOptions, ChangeSet, Compressor, Config, ImpactAnalyzer, Step, VerifyRequest,
+};
 use orq_daemon::client::{self, Mode};
 use orq_impact::CargoImpactAnalyzer;
 use serde_json::json;
@@ -40,27 +42,19 @@ pub fn run(args: &FixArgs) -> Result<u8> {
     let budget = args.budget.unwrap_or(config.budget);
     let up_to = args.up_to.unwrap_or(config.up_to);
 
-    let analyzer = CargoImpactAnalyzer::new(config.clone());
-    let changes = if args.files.is_empty() {
-        analyzer.detect_changes(&root)?
-    } else {
-        ChangeSet {
-            files: args
-                .files
-                .iter()
-                .map(|f| root::relative_to_root(&root, f))
-                .collect(),
-        }
-    };
-    let impact = analyzer.analyze(&root, &changes)?;
-
+    let explicit = (!args.files.is_empty()).then(|| ChangeSet {
+        files: args
+            .files
+            .iter()
+            .map(|f| root::relative_to_root(&root, f))
+            .collect(),
+    });
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .context("building tokio runtime")?;
-    let outcome = runtime
-        .block_on(orq_runner::fix::apply_fixes(&root, &impact, &config.build))
-        .context("applying fixes")?;
+    let (changes, outcome) =
+        runtime.block_on(fix_first(&root, &config, explicit, &config.build))?;
     let fixed: Vec<String> = outcome
         .files_changed
         .iter()
@@ -108,4 +102,46 @@ pub fn run(args: &FixArgs) -> Result<u8> {
         println!("{}", report.text.trim_end());
     }
     Ok(if result.outcome.is_pass() { 0 } else { 1 })
+}
+
+/// The budget left for the report once the one-line `note` (such as the
+/// `fixed: ...` line) is printed above it, so both together stay within
+/// `budget`.
+pub(crate) fn budget_after_note(budget: usize, note: Option<&str>) -> usize {
+    match note {
+        // +1 token for the newline between the two.
+        Some(note) => budget.saturating_sub(orq_core::estimate_tokens(note) + 1),
+        None => budget,
+    }
+}
+
+/// `text` with `note` as its first line.
+pub(crate) fn with_note(note: Option<&str>, text: &str) -> String {
+    match note {
+        Some(note) => format!("{note}\n{}", text.trim_end()),
+        None => text.trim_end().to_string(),
+    }
+}
+
+/// Applies the machine-applicable fixes to the crates affected by `explicit`
+/// (or by the files the VCS reports as changed) and returns the change set
+/// that was used, so the verification that follows covers the same crates.
+///
+/// Shared by `orq fix`, `orq verify --fix` and the hook.
+pub(crate) async fn fix_first(
+    root: &Path,
+    config: &Config,
+    explicit: Option<ChangeSet>,
+    build: &BuildOptions,
+) -> Result<(ChangeSet, orq_runner::fix::FixOutcome)> {
+    let analyzer = CargoImpactAnalyzer::new(config.clone());
+    let changes = match explicit {
+        Some(changes) => changes,
+        None => analyzer.detect_changes(root)?,
+    };
+    let impact = analyzer.analyze(root, &changes)?;
+    let outcome = orq_runner::fix::apply_fixes(root, &impact, build)
+        .await
+        .context("applying fixes")?;
+    Ok((changes, outcome))
 }

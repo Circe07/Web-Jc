@@ -3,19 +3,20 @@
 use anyhow::{Context, Result};
 use orq_compress::LlmCompressor;
 use orq_core::{
-    root, stats, BuildOptions, ChangeSet, Compressor, Config, CrateId, VerifyRequest, VerifyResult,
+    root, stats, BuildOptions, ChangeSet, Compressor, Config, CrateId, Step, VerifyRequest,
+    VerifyResult,
 };
 use orq_daemon::client::{self, Mode};
 use serde_json::{json, Value};
 
-use crate::VerifyArgs;
+use crate::{fix, VerifyArgs};
 
 /// Runs `orq verify` and returns the process exit code (0 pass, 1 fail).
 pub fn run(args: &VerifyArgs) -> Result<u8> {
     let root = root::resolve(args.root.as_deref())?;
     let config = Config::load(&root)?;
     let budget = args.budget.unwrap_or(config.budget);
-    let request = VerifyRequest {
+    let mut request = VerifyRequest {
         root: root.clone(),
         changes: (!args.files.is_empty()).then(|| ChangeSet {
             files: args
@@ -40,9 +41,36 @@ pub fn run(args: &VerifyArgs) -> Result<u8> {
         .enable_all()
         .build()
         .context("building tokio runtime")?;
+
+    // `--fix`: apply the machine-applicable suggestions first, so the report
+    // is about the code the agent will actually have.
+    let mut fixed: Vec<String> = Vec::new();
+    let mut note: Option<String> = None;
+    if args.fix && request.up_to != Step::Fmt {
+        let effective = request
+            .build
+            .clone()
+            .unwrap_or_else(|| config.build.clone());
+        let (changes, outcome) = runtime.block_on(fix::fix_first(
+            &root,
+            &config,
+            request.changes.take(),
+            &effective,
+        ))?;
+        request.changes = Some(changes);
+        fixed = outcome
+            .files_changed
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect();
+        note = outcome.summary();
+    }
+    let report_budget = fix::budget_after_note(budget, note.as_deref());
+    request.token_budget = report_budget;
+
     let verified = runtime.block_on(client::verify(&request, &config, mode))?;
     let result = verified.result;
-    let report = LlmCompressor::new(config.lang).compress(&result, budget);
+    let report = LlmCompressor::new(config.lang).compress(&result, report_budget);
 
     let record =
         stats::StatsRecord::new(&result, &report, request.up_to, verified.via_daemon, "cli");
@@ -55,10 +83,13 @@ pub fn run(args: &VerifyArgs) -> Result<u8> {
             .build
             .clone()
             .unwrap_or_else(|| config.build.clone());
-        let json = enrich(report.json, &result, &effective);
+        let mut json = enrich(report.json, &result, &effective);
+        if args.fix {
+            json["fixed"] = json!(fixed);
+        }
         serde_json::to_string_pretty(&json).context("serializing report")?
     } else {
-        report.text
+        fix::with_note(note.as_deref(), &report.text)
     };
     println!("{}", output.trim_end());
     Ok(if result.outcome.is_pass() { 0 } else { 1 })

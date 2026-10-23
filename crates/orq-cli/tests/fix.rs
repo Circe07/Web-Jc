@@ -88,3 +88,126 @@ fn fix_json_has_fixed_and_report() {
     assert_eq!(json["fixed"], serde_json::json!([]));
     assert!(json["report"].is_object());
 }
+
+#[test]
+fn verify_fix_applies_suggestions_and_says_which_files() {
+    let dir = fixture("clippy-warn");
+    let out = orq(dir.path())
+        .args([
+            "verify",
+            "--fix",
+            "--files",
+            "src/lib.rs",
+            "--up-to",
+            "clippy",
+        ])
+        .assert()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8(out).unwrap();
+    let first = text.lines().next().unwrap();
+    assert_eq!(first, "fixed: 1 file (src/lib.rs)", "{text}");
+    let source = std::fs::read_to_string(dir.path().join("src/lib.rs")).unwrap();
+    assert!(!source.contains("return v.len() == 0"), "{source}");
+    // The report is about the fixed code: the needless `return` is gone.
+    assert!(!text.contains("needless_return"), "{text}");
+}
+
+#[test]
+fn verify_without_fix_leaves_the_files_alone() {
+    let dir = fixture("clippy-warn");
+    let before = std::fs::read_to_string(dir.path().join("src/lib.rs")).unwrap();
+    orq(dir.path())
+        .args(["verify", "--files", "src/lib.rs", "--up-to", "clippy"])
+        .assert()
+        .stdout(predicate::str::contains("fixed:").not());
+    let after = std::fs::read_to_string(dir.path().join("src/lib.rs")).unwrap();
+    assert_eq!(before, after);
+}
+
+#[test]
+fn verify_fix_on_clean_code_adds_no_line() {
+    let dir = fixture("multi");
+    let out = orq(dir.path())
+        .args([
+            "verify",
+            "--fix",
+            "--files",
+            "crates/base/src/lib.rs",
+            "--up-to",
+            "check",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8(out).unwrap();
+    assert!(text.starts_with("PASS"), "{text}");
+}
+
+#[test]
+fn verify_fix_leaves_code_that_does_not_compile_alone() {
+    let dir = fixture("broken-type");
+    let before = std::fs::read_to_string(dir.path().join("src/lib.rs")).unwrap();
+    orq(dir.path())
+        .args([
+            "verify",
+            "--fix",
+            "--files",
+            "src/lib.rs",
+            "--up-to",
+            "check",
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("E0308"))
+        .stdout(predicate::str::contains("fixed:").not());
+    let after = std::fs::read_to_string(dir.path().join("src/lib.rs")).unwrap();
+    assert_eq!(before, after);
+}
+
+#[test]
+fn verify_fix_json_lists_the_fixed_files() {
+    let dir = fixture("clippy-warn");
+    let out = orq(dir.path())
+        .args([
+            "verify",
+            "--fix",
+            "--json",
+            "--files",
+            "src/lib.rs",
+            "--up-to",
+            "clippy",
+        ])
+        .assert()
+        .get_output()
+        .stdout
+        .clone();
+    let json: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(json["fixed"], serde_json::json!(["src/lib.rs"]));
+}
+
+#[test]
+fn verify_fix_report_stays_within_the_budget() {
+    let dir = fixture("clippy-warn");
+    let out = orq(dir.path())
+        .args([
+            "verify",
+            "--fix",
+            "--budget",
+            "30",
+            "--files",
+            "src/lib.rs",
+            "--up-to",
+            "clippy",
+        ])
+        .assert()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8(out).unwrap();
+    assert!(orq_core::estimate_tokens(text.trim_end()) <= 30, "{text}");
+    assert!(text.starts_with("fixed: 1 file"), "{text}");
+}

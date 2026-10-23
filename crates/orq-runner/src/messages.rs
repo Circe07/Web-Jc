@@ -7,6 +7,7 @@ use orq_core::{Diagnostic, Severity, Step};
 use serde::Deserialize;
 
 use crate::index::CrateIndex;
+use crate::signatures;
 use crate::util::strip_ansi;
 
 /// One line of cargo's JSON stream (only the fields we need).
@@ -201,6 +202,42 @@ fn to_diagnostic(
     })
 }
 
+/// The signature of the item rustc says is `defined here` (a `note` child of
+/// the error), as the companion that follows the error. Only workspace
+/// sources qualify: std and registry paths are absolute.
+fn definition_companion(
+    msg: &RustcMessage,
+    error: &Diagnostic,
+    index: &CrateIndex,
+) -> Option<Diagnostic> {
+    let child = msg
+        .children
+        .iter()
+        .find(|c| c.level == "note" && c.message.ends_with(" defined here"))?;
+    let span = child
+        .spans
+        .iter()
+        .find(|s| s.is_primary)
+        .or_else(|| child.spans.first())?;
+    if span.file_name.starts_with('<') {
+        return None;
+    }
+    let file = index.relative(Path::new(&span.file_name));
+    if !file.is_relative() || file.starts_with("..") {
+        return None;
+    }
+    let source = std::fs::read_to_string(index.root().join(&file)).ok()?;
+    let lines: Vec<String> = source.lines().map(str::to_string).collect();
+    let at = usize::try_from(span.line_start).ok()?.checked_sub(1)?;
+    let signature = signatures::signature_from(&lines, at)?;
+    Some(signatures::companion(
+        error,
+        signature,
+        file,
+        span.line_start,
+    ))
+}
+
 /// Parses the stdout of a cargo command run with `--message-format=json`.
 ///
 /// Lines that are not compiler messages (artifacts, build-script output,
@@ -226,7 +263,13 @@ pub(crate) fn parse_compiler_messages(
             continue;
         }
         if let Some(msg) = &line.message {
-            out.extend(to_diagnostic(&line, msg, step, index));
+            let diagnostic = to_diagnostic(&line, msg, step, index);
+            let companion = diagnostic
+                .as_ref()
+                .filter(|d| d.severity == Severity::Error)
+                .and_then(|d| definition_companion(msg, d, index));
+            out.extend(diagnostic);
+            out.extend(companion);
         }
     }
     out

@@ -234,3 +234,61 @@ async fn apply_fix_fixes_clippy_lints_and_reports() {
     );
     assert!(result["structuredContent"]["report"].is_object());
 }
+
+#[tokio::test]
+async fn verify_fix_applies_suggestions_and_reports_them() {
+    let dir = fixture("clippy-warn");
+    let (mut client, _server) = start(dir.path()).await;
+    let result = client
+        .call(
+            "verify",
+            json!({"files": ["src/lib.rs"], "up_to": "clippy", "fix": true}),
+        )
+        .await;
+    assert_ne!(result["isError"], json!(true), "{result}");
+    assert!(
+        text(&result).starts_with("fixed: 1 file (src/lib.rs)"),
+        "{result}"
+    );
+    assert_eq!(
+        result["structuredContent"]["fixed"],
+        json!(["src/lib.rs"]),
+        "{result}"
+    );
+    let source = std::fs::read_to_string(dir.path().join("src/lib.rs")).unwrap();
+    assert!(!source.contains("return v.len() == 0"), "{source}");
+}
+
+#[tokio::test]
+async fn verify_without_fix_does_not_edit_files() {
+    let dir = fixture("clippy-warn");
+    let before = std::fs::read_to_string(dir.path().join("src/lib.rs")).unwrap();
+    let (mut client, _server) = start(dir.path()).await;
+    let result = client
+        .call(
+            "verify",
+            json!({"files": ["src/lib.rs"], "up_to": "clippy"}),
+        )
+        .await;
+    assert!(!text(&result).contains("fixed:"), "{result}");
+    assert!(result["structuredContent"].get("fixed").is_none());
+    let after = std::fs::read_to_string(dir.path().join("src/lib.rs")).unwrap();
+    assert_eq!(before, after);
+}
+
+#[tokio::test]
+async fn verify_schema_documents_the_fix_option() {
+    let dir = fixture("single");
+    let (mut client, _server) = start(dir.path()).await;
+    let list = client.request("tools/list", json!({})).await;
+    let verify = list["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "verify")
+        .unwrap();
+    assert_eq!(
+        verify["inputSchema"]["properties"]["fix"]["type"],
+        "boolean"
+    );
+}
