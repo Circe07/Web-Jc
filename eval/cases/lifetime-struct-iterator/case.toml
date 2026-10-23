@@ -18,4 +18,4 @@ line = 12
 [[facts]]
 code = "E0106"
 file = "src/lib.rs"
-line = 45
+line = 48

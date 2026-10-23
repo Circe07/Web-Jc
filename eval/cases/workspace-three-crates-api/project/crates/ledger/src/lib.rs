@@ -25,7 +25,8 @@ impl Money {
 
     /// Sum of two amounts, `None` when the currencies differ.
     pub fn checked_add(self, other: Money) -> Option<Money> {
-        (self.currency == other.currency).then(|| Money::new(self.minor + other.minor, self.currency))
+        (self.currency == other.currency)
+            .then(|| Money::new(self.minor + other.minor, self.currency))
     }
 }
 
@@ -35,7 +36,13 @@ impl fmt::Display for Money {
             Currency::Eur => "EUR",
             Currency::Usd => "USD",
         };
-        write!(f, "{}.{:02} {}", self.minor / 100, (self.minor % 100).abs(), code)
+        write!(
+            f,
+            "{}.{:02} {}",
+            self.minor / 100,
+            (self.minor % 100).abs(),
+            code
+        )
     }
 }
 
@@ -61,6 +68,9 @@ impl Entry {
         if amount.minor == 0 {
             return Err(EntryError::ZeroAmount);
         }
-        Ok(Entry { description: description.to_string(), amount })
+        Ok(Entry {
+            description: description.to_string(),
+            amount,
+        })
     }
 }

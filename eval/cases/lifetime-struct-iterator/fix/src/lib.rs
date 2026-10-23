@@ -36,7 +36,10 @@ impl<'a> Iterator for Pairs<'a> {
                 continue;
             }
             let (key, value) = segment.split_once('=').unwrap_or((segment, ""));
-            return Some(Pair { key: key.trim(), value: value.trim() });
+            return Some(Pair {
+                key: key.trim(),
+                value: value.trim(),
+            });
         }
     }
 }
@@ -65,9 +68,18 @@ mod tests {
         assert_eq!(
             pairs,
             vec![
-                Pair { key: "a", value: "1" },
-                Pair { key: "b", value: "two" },
-                Pair { key: "c", value: "" },
+                Pair {
+                    key: "a",
+                    value: "1"
+                },
+                Pair {
+                    key: "b",
+                    value: "two"
+                },
+                Pair {
+                    key: "c",
+                    value: ""
+                },
             ]
         );
     }

@@ -10,7 +10,10 @@ pub struct Invoice {
 
 impl Invoice {
     pub fn new(vat_percent: i64) -> Self {
-        Invoice { lines: Vec::new(), vat_percent }
+        Invoice {
+            lines: Vec::new(),
+            vat_percent,
+        }
     }
 
     /// Adds a line of `cents`.

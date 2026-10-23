@@ -6,11 +6,11 @@ use billing::Invoice;
 pub fn render(invoice: &Invoice) -> String {
     let mut out = String::new();
     for line in &invoice.lines {
-        out.push_str(&format!("{:<10} {:>8}\n", line.description, cents(line.amount.0)));
+        out.push_str(&format!("{}: {}\n", line.description, cents(line.amount.0)));
     }
-    out.push_str(&format!("{:<10} {:>8}\n", "net", cents(invoice.net().0)));
-    out.push_str(&format!("{:<10} {:>8}\n", "vat", cents(invoice.vat().0)));
-    out.push_str(&format!("{:<10} {:>8}", "gross", cents(invoice.gross().0)));
+    out.push_str(&format!("{}: {}\n", "net", cents(invoice.net().0)));
+    out.push_str(&format!("{}: {}\n", "vat", cents(invoice.vat().0)));
+    out.push_str(&format!("{}: {}", "gross", cents(invoice.gross().0)));
     out
 }
 
@@ -29,7 +29,7 @@ mod tests {
         let text = render(&inv);
         assert_eq!(
             text,
-            "book          19.99 EUR\nnet           19.99 EUR\nvat            1.99 EUR\ngross         21.98 EUR"
+            "book: 19.99 EUR\nnet: 19.99 EUR\nvat: 1.99 EUR\ngross: 21.98 EUR"
         );
     }
 }

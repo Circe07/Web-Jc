@@ -306,6 +306,7 @@ class HarnessError(Exception):
 def cargo_env(target_dir: Path) -> dict:
     env = dict(os.environ)
     env.update({"CARGO_TERM_COLOR": "never", "CARGO_TARGET_DIR": str(target_dir),
+                "RUST_BACKTRACE": "0",
                 "CARGO_NET_OFFLINE": "true", "NO_COLOR": "1"})
     return env
 
