@@ -187,9 +187,15 @@ def load_case(case_dir: Path) -> dict:
     return data
 
 
-def active_seconds(r: dict) -> float:
-    """Wall time minus deliberate waits (rate-limit pacing, retry backoff)."""
-    return r["wall_seconds"] - r.get("wait_seconds", 0.0)
+def workflow_seconds(r: dict) -> float:
+    """Time the workflow itself would take: model calls plus its own checker.
+
+    Raw mode checks with cargo, orq mode with orq. The harness also runs
+    cargo in orq mode to judge success, and waits between Gemini calls; a
+    real orq workflow does neither, so both are left out.
+    """
+    tool = r.get("cargo_seconds", 0.0) if r["mode"] == "raw" else r.get("orq_seconds", 0.0)
+    return r.get("model_seconds", 0.0) + tool
 
 
 def summarize(records: list[dict]) -> dict:
@@ -214,9 +220,9 @@ def summarize(records: list[dict]) -> dict:
             "mean_turns": mean(r["turns"] for r in ok_runs),
             "mean_tokens": mean(r["input_tokens"] + r["output_tokens"] for r in ok_runs),
             "mean_feedback_tokens": mean(fb),
-            "mean_active_seconds": mean(active_seconds(r) for r in ok_runs),
+            "mean_workflow_seconds": mean(workflow_seconds(r) for r in ok_runs),
             "mean_model_seconds": mean(r.get("model_seconds", 0.0) for r in ok_runs),
-            "mean_tool_seconds": mean(r.get("cargo_seconds", 0.0) + r.get("orq_seconds", 0.0)
+            "mean_tool_seconds": mean(workflow_seconds(r) - r.get("model_seconds", 0.0)
                                       for r in ok_runs),
             "cost_total": sum(costs),
             "cost_mean": mean(costs),
@@ -232,9 +238,9 @@ def render_markdown(run_id: str, model: str, args_desc: str, records: list[dict]
              "Tokens are input (uncached + cache read + cache write) plus output. "
              "Cost is an **estimate** from the price table in the script "
              "(cache reads 0.1x, cache writes 1.25x of input).", "",
-             "Times exclude deliberate waits (rate-limit pacing, retry backoff). "
-             "*Tools* is cargo plus orq: the harness always runs cargo to judge "
-             "success, so orq mode pays for both.", "",
+             "Time is the workflow's own: model calls plus its checker (cargo in raw "
+             "mode, orq in orq mode, including the final passing check). Rate-limit "
+             "waits and the cargo runs the harness uses to judge orq mode are left out.", "",
              "## Per mode", "",
              "| mode | runs | success rate | mean turns | mean in+out tokens | "
              "mean feedback tokens/turn | mean time (s) | model (s) | tools (s) | "
@@ -244,7 +250,7 @@ def render_markdown(run_id: str, model: str, args_desc: str, records: list[dict]
         lines.append(
             f"| {mode} | {s['runs']} | {s['successes']}/{s['runs'] - s['errors']} "
             f"({s['success_rate']:.0%}) | {s['mean_turns']:.2f} | {s['mean_tokens']:.0f} | "
-            f"{s['mean_feedback_tokens']:.0f} | {s['mean_active_seconds']:.1f} | "
+            f"{s['mean_feedback_tokens']:.0f} | {s['mean_workflow_seconds']:.1f} | "
             f"{s['mean_model_seconds']:.1f} | {s['mean_tool_seconds']:.1f} | "
             f"${s['cost_mean']:.4f} | "
             f"${s['cost_total']:.4f} | {s['errors']} |")
@@ -269,7 +275,7 @@ def render_markdown(run_id: str, model: str, args_desc: str, records: list[dict]
                 f"{sum(r['turns'] for r in rs) / len(rs):.2f} | "
                 f"{sum(r['input_tokens'] + r['output_tokens'] for r in rs) / len(rs):.0f} | "
                 f"{(sum(fb) / len(fb)) if fb else 0:.0f} | "
-                f"{sum(active_seconds(r) for r in rs) / len(rs):.1f} |")
+                f"{sum(workflow_seconds(r) for r in rs) / len(rs):.1f} |")
     errs = [r for r in records if r["error"]]
     if errs:
         lines += ["", "## Errors", ""]
@@ -609,6 +615,9 @@ def run_one(case: dict, mode: str, repeat: int, args, client, run_id: str) -> di
             text = response_text(resp)
             written, rejected = apply_files(project, parse_file_blocks(text))
             passed, raw_out = timed_judge()
+            # orq mode checks with orq after every reply, as a real orq
+            # workflow would, even when cargo says the fix already passes.
+            fb = feedback_for(raw_out) if mode == "orq" else raw_out
             if passed:
                 rec["success"] = True
                 rec["outcome"] = "success"
@@ -622,7 +631,6 @@ def run_one(case: dict, mode: str, repeat: int, args, client, run_id: str) -> di
                 note += f"Rejected paths: {', '.join(rejected)}\n"
             if resp.stop_reason == "max_tokens":
                 note += "Your reply was cut off by the token limit.\n"
-            fb = feedback_for(raw_out)
             rec["feedback_tokens"].append(est_tokens(fb))
             messages.append({"role": "assistant", "content": text or "(empty reply)"})
             messages.append({"role": "user", "content":
