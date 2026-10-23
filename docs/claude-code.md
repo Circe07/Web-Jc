@@ -83,6 +83,84 @@ The structured content of the same call is the JSON form of the report
 impact: changed [base], dependents [mid, leaf, app]
 ```
 
+## Automatic verification with the hook
+
+The MCP tool only helps if the agent remembers to call it. `orq hook` is a
+[`PostToolUse` hook](https://code.claude.com/docs/en/hooks) that runs after
+every successful `Edit`, `Write` or `MultiEdit`, verifies the edited file and
+tells Claude when the build broke.
+
+Add it to `.claude/settings.json` (shared) or `.claude/settings.local.json`:
+
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [{ "type": "command", "command": "orq hook", "timeout": 120 }]
+      }
+    ]
+  }
+}
+```
+
+(`timeout` is in seconds.) Or install the [plugin](#plugin), which registers
+the same hook and the MCP server together.
+
+What the hook does:
+
+- Reads the hook JSON from stdin and takes the edited path from
+  `tool_input.file_path` (always absolute); `cwd` resolves relative paths.
+- Only `.rs`, `Cargo.toml`, `Cargo.lock` and `build.rs` matter. Any other
+  file, a file outside a cargo workspace, a path ignored by `orq.toml`
+  (`ignore`) or malformed input exits 0 with no output, immediately.
+- Otherwise it runs the same pipeline as `orq verify --files <file>` (daemon
+  when running, unless `ORQ_NO_DAEMON=1`) and records the run in
+  `orq stats` with `source = "hook"`.
+- Pass: exit 0, no output, nothing added to the context.
+- Fail: exit 0 and a JSON decision on stdout,
+  `{"decision":"block","reason":"orq verify failed after your edit:\n<compact report>"}`.
+  For `PostToolUse` the docs say `decision: "block"` "adds the `reason` next
+  to the tool result"; the tool already ran, so the file stays as written and
+  Claude simply sees the error and fixes it. This is preferred to exit code 2
+  plus stderr because it is the structured form and keeps stderr for logs.
+- Internal errors (daemon, cargo, bad JSON) are logged to stderr and exit 0:
+  the hook never blocks the agent.
+
+Options: `orq hook --up-to <fmt|check|clippy|test>` (default `check`) and
+`--budget <tokens>` (default 600). The defaults keep the loop fast, since the
+hook runs after every edit and its failures land in the agent's context. Let
+the agent run clippy and tests through the MCP tools (or raise `--up-to` if
+you prefer a stricter hook).
+
+## Plugin
+
+`integrations/claude-code/` in this repository is a Claude Code marketplace
+with one plugin, `orq`, that registers the hook above and the MCP server
+(`orq mcp`) in one step. The plugin does not ship the binary: install `orq`
+first.
+
+```sh
+cargo install --path crates/orq-cli      # orq on PATH; check with `orq doctor`
+claude plugin marketplace add ./integrations/claude-code
+claude plugin install orq@orq-marketplace
+```
+
+Layout (per the [plugin reference](https://code.claude.com/docs/en/plugins-reference)):
+
+```text
+integrations/claude-code/
+├── .claude-plugin/marketplace.json   # marketplace "orq-marketplace"
+└── orq/
+    ├── .claude-plugin/plugin.json
+    ├── hooks/hooks.json              # PostToolUse -> `orq hook`
+    ├── .mcp.json                     # `orq mcp`
+    └── README.md
+```
+
+Both manifests pass `claude plugin validate`.
+
 ## Troubleshooting
 
 - Nothing on stdout but JSON-RPC: logs go to stderr. Use `RUST_LOG=debug` and

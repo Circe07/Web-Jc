@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "orq": {
+      "command": "orq",
+      "args": ["mcp"]
+    }
+  }
+}
