@@ -72,7 +72,7 @@ fn mcp_binary_serves_verify_over_stdio() {
         json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}),
         true,
     );
-    assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 4);
+    assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 5);
     let call = request(
         json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
             "name": "verify",

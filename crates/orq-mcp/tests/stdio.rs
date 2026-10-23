@@ -106,7 +106,7 @@ fn text(result: &Value) -> String {
 }
 
 #[tokio::test]
-async fn lists_the_four_tools() {
+async fn lists_the_tools() {
     let dir = fixture("single");
     let (mut client, _server) = start(dir.path()).await;
     let list = client.request("tools/list", json!({})).await;
@@ -119,7 +119,13 @@ async fn lists_the_four_tools() {
     names.sort_unstable();
     assert_eq!(
         names,
-        ["explain_error", "impact", "run_affected_tests", "verify"]
+        [
+            "apply_fix",
+            "explain_error",
+            "impact",
+            "run_affected_tests",
+            "verify"
+        ]
     );
     for tool in list["tools"].as_array().unwrap() {
         assert!(tool["description"].as_str().unwrap().len() > 40);
@@ -204,4 +210,27 @@ async fn verify_accepts_build_args() {
     // must be accepted and answer with a report, not an argument error.
     assert!(result["structuredContent"].is_object(), "{result}");
     assert!(!text(&result).contains("invalid arguments"), "{result}");
+}
+
+#[tokio::test]
+async fn apply_fix_fixes_clippy_lints_and_reports() {
+    let dir = fixture("clippy-warn");
+    let (mut client, _server) = start(dir.path()).await;
+    let result = client
+        .call(
+            "apply_fix",
+            json!({"files": ["src/lib.rs"], "up_to": "clippy"}),
+        )
+        .await;
+    assert_ne!(result["isError"], json!(true), "{result}");
+    assert!(
+        text(&result).starts_with("fixed 1 file(s): src/lib.rs"),
+        "{result}"
+    );
+    assert_eq!(
+        result["structuredContent"]["fixed"],
+        json!(["src/lib.rs"]),
+        "{result}"
+    );
+    assert!(result["structuredContent"]["report"].is_object());
 }

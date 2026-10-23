@@ -108,6 +108,14 @@ fn with_build(base: Value) -> Value {
     props
 }
 
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct FixArgs {
+    files: Option<Vec<String>>,
+    up_to: Option<Step>,
+    budget: Option<usize>,
+}
+
 #[derive(Deserialize)]
 struct ExplainArgs {
     code: String,
@@ -130,7 +138,7 @@ fn titled(title: &str) -> ToolAnnotations {
     ToolAnnotations::with_title(title)
 }
 
-/// The four tools, with descriptions written for the model.
+/// The tools, with descriptions written for the model.
 pub(crate) fn definitions() -> Vec<Tool> {
     let files = json!({
         "type": "array",
@@ -209,7 +217,30 @@ pub(crate) fn definitions() -> Vec<Tool> {
         })),
     );
     impact.annotations = Some(titled("Impact of changes"));
-    vec![verify, tests, explain, impact]
+    let mut fix = Tool::new(
+        "apply_fix",
+        "Apply the compiler and clippy suggestions that are marked machine-applicable, in one \
+         call, and then verify again. Use it when a `verify` report shows `suggestion:` lines or \
+         clippy lints, BEFORE editing by hand: it is cheaper and less error-prone. It only \
+         applies safe, machine-applicable fixes (it never touches code that does not compile); \
+         review the diff afterwards. Returns the list of fixed files plus the compact verify \
+         report of the result.",
+        schema(json!({
+            "type": "object",
+            "properties": {
+                "files": files,
+                "up_to": {
+                    "type": "string",
+                    "enum": ["check", "clippy", "test"],
+                    "description": "Last step of the verification after fixing. Default: from orq config."
+                },
+                "budget": budget,
+            },
+            "additionalProperties": false
+        })),
+    );
+    fix.annotations = Some(titled("Apply machine-applicable fixes"));
+    vec![verify, tests, explain, impact, fix]
 }
 
 /// Dispatches a call. `None` means the tool does not exist.
@@ -234,6 +265,10 @@ pub(crate) async fn call(
         },
         "impact" => match parse::<ImpactArgs>(args) {
             Ok(a) => impact(state, a.files).await,
+            Err(e) => Err(e),
+        },
+        "apply_fix" => match parse::<FixArgs>(args) {
+            Ok(a) => apply_fix(state, a.files, a.up_to, a.budget).await,
             Err(e) => Err(e),
         },
         _ => return None,
@@ -355,5 +390,77 @@ async fn impact(state: &State, files: Option<Vec<String>>) -> Result<CallToolRes
         "dependents": dependents,
         "full_rebuild": set.full_rebuild,
     }));
+    Ok(out)
+}
+
+async fn apply_fix(
+    state: &State,
+    files: Option<Vec<String>>,
+    up_to: Option<Step>,
+    budget: Option<usize>,
+) -> Result<CallToolResult, String> {
+    let budget = budget.unwrap_or(state.config.budget);
+    let up_to = up_to.unwrap_or(state.config.up_to);
+    let root = state.root.clone();
+    let config = state.config.clone();
+    let explicit = files.filter(|f| !f.is_empty());
+    let (change_set, impact) = tokio::task::spawn_blocking(move || -> Result<_, CoreError> {
+        let analyzer = CargoImpactAnalyzer::new(config);
+        let change_set = match explicit {
+            Some(f) => changes(&root, f),
+            None => analyzer.detect_changes(&root)?,
+        };
+        let impact = analyzer.analyze(&root, &change_set)?;
+        Ok((change_set, impact))
+    })
+    .await
+    .map_err(|e| format!("apply_fix failed: {e}"))?
+    .map_err(|e| format!("apply_fix failed: {e}"))?;
+
+    let outcome = orq_runner::fix::apply_fixes(&state.root, &impact, &state.config.build)
+        .await
+        .map_err(|e| format!("apply_fix failed: {e}"))?;
+    let fixed: Vec<String> = outcome
+        .files_changed
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect();
+
+    let request = VerifyRequest {
+        root: state.root.clone(),
+        changes: Some(change_set),
+        up_to,
+        token_budget: budget,
+        use_cache: true,
+        build: None,
+    };
+    let mode = if no_daemon() {
+        Mode::InProcess
+    } else {
+        Mode::Auto
+    };
+    let verified = client::verify(&request, &state.config, mode)
+        .await
+        .map_err(|e| format!("verify failed: {e}"))?;
+    let result = verified.result;
+    let report = LlmCompressor::new(state.config.lang).compress(&result, budget);
+    let record = stats::StatsRecord::new(&result, &report, up_to, verified.via_daemon, "fix");
+    if let Err(e) = stats::append(&state.root, &record) {
+        tracing::warn!("could not record stats: {e}");
+    }
+
+    let mut summary = format!("fixed {} file(s)", fixed.len());
+    if !fixed.is_empty() {
+        summary.push_str(": ");
+        summary.push_str(&fixed.join(", "));
+    }
+    if !outcome.cargo_ok && fixed.is_empty() {
+        summary.push_str(" (cargo could not apply fixes; the code may not compile)");
+    }
+    let mut out = CallToolResult::success(vec![ContentBlock::text(format!(
+        "{summary}\n{}",
+        report.text.trim_end()
+    ))]);
+    out.structured_content = Some(json!({"fixed": fixed, "report": report.json}));
     Ok(out)
 }
