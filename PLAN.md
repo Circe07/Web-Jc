@@ -389,6 +389,55 @@ Primera ejecución del arnés contra un modelo real (Gemini Flash-Lite, plan gra
 - Repetir la prueba con más repeticiones y con un modelo más fuerte, para que el ruido de latencia y los despistes del modelo pesen menos.
 - orq avisa de `file is not formatted` en los ficheros del agente, aunque el juez ignora fmt: ruido menor.
 
+### Oleada 8 — Tiempo y fluidez: que el agente desarrolle y corrija más rápido · planificada 2026-10-23
+
+**Objetivo:** reducir el **tiempo de reloj** de un agente que desarrolla en Rust, no solo los tokens. Una tarea termina cuando el código está en verde, y su tiempo es:
+
+> tiempo hasta verde ≈ Σ por intento (modelo + verificación) + esperas (bloqueos de cargo, compilaciones en frío)
+
+Lo que nos dijo la Oleada 7: en los casos de juguete la verificación cuesta ~1 s y el modelo ~15 s, así que allí solo cuentan los **intentos**. En proyectos reales la verificación pesa mucho más (ripgrep: 34 s en frío con cargo, 7,2 s con el daemon caliente). Hay que medir en proyectos de tamaño real y con tareas de desarrollo, no solo de corrección.
+
+**Regla de la oleada:** nada se adopta sin medirlo. Cada integración se compara con la base en el banco de la F0 y solo se queda si baja el tiempo hasta verde. Primero se reutiliza lo que ya hace la comunidad.
+
+**F0 — Medir lo que importa (va primero)**
+- Banco «tiempo hasta verde»: un proyecto mediano real (fijado a un commit, p. ej. ripgrep o este mismo repo) con tareas del agente de dos tipos:
+  - *desarrollo*: implementar algo a partir de una especificación con tests (una función, un flag de CLI, un trait);
+  - *corrección*: los casos de `eval/cases` y fallos realistas en el proyecto mediano.
+- Modos: `cargo` a secas · `cargo` + perfil rápido · orq completo (daemon, caché, perfil rápido, hook).
+- Métricas: segundos de reloj hasta verde (mediana y p90), intentos, tiempo de verificación, tiempo de modelo y esperas.
+- Modelo más potente y más iteraciones: `gemini-flash-latest` (o Claude si hay `ANTHROPIC_API_KEY`) con 5 repeticiones, y Flash-Lite como control.
+
+**F1 — Compilar y testear más rápido (integrar herramientas de la comunidad)**
+
+`orq setup` ya propone un perfil dev ligero, Cranelift, mold/wild y sccache, pero solo como sugerencia y sin medir. Se mide cada uno y se aplica por defecto lo que gane:
+
+| Herramienta | Qué acelera | Notas |
+| --- | --- | --- |
+| Perfil dev (`debug = "line-tables-only"`, deps a `opt-level = 1`, `split-debuginfo`) | enlazado y tests | estable; ya está en `orq setup` |
+| `lld` (por defecto en Linux x86_64 desde Rust 1.90), `mold`, `wild` | enlazado | medir si `mold`/`wild` ganan a `lld` |
+| `sccache` | compilaciones limpias, varios worktrees de agentes | clave cuando varios agentes trabajan en paralelo |
+| `cargo-nextest` | ejecución de tests | orq ya lo soporta (`nextest = "auto"`) |
+| Backend Cranelift | codegen en debug | requiere nightly; opcional |
+| Front-end paralelo (`-Zthreads`) | análisis de tipos | requiere nightly; opcional |
+| `cargo-hakari` | recompilaciones por unificación de features | solo workspaces grandes |
+| `cargo-machete` | dependencias que sobran | aviso en `orq doctor` |
+
+- Aplicar el perfil rápido sin tocar el repo del usuario (variables `CARGO_PROFILE_DEV_*`), con un directorio de compilación propio si los flags difieren, para no invalidar el de cargo ni el de rust-analyzer.
+
+**F2 — Menos intentos (la palanca más grande: cada intento cuesta una llamada al modelo)**
+- `orq verify --fix`: aplicar las sugerencias `MachineApplicable` de rustc/clippy **antes** de responder, para que el agente no gaste intentos en lints mecánicos (se reutiliza `apply_fixes` de la T5.3).
+- Un informe que diga todo lo que ya se sabe en un solo intento, por ejemplo los avisos de clippy de los crates que sí compilan junto a los errores de los que no.
+- Contexto que evite intentos a ciegas: la firma del item implicado (función, trait, struct) junto al error. Explorar si rust-analyzer (que ya hace esto) puede dárnoslo.
+
+**F3 — Fluidez: que el agente no espere**
+- Respuesta progresiva: devolver los errores de `check` en cuanto salen, sin esperar a clippy ni a los tests (CLI y MCP).
+- Verificación especulativa: el daemon verifica al guardar, y `verify` devuelve el resultado ya calculado. Meta: < 1 s tras editar en un proyecto mediano con el daemon caliente.
+- Sin bloqueos «Blocking waiting for file lock»: orq y rust-analyzer no deben pelearse por `target/`. `orq doctor` lo detecta y propone un directorio separado para rust-analyzer.
+- Selección fina de tests: ejecutar solo los tests afectados por el cambio (pendiente desde la Oleada 5).
+- Cerrar la brecha en frío: hoy orq sin daemon es ~15 % más lento que `cargo build && cargo test` porque también pasa fmt y clippy. Ordenar la escalera para llegar antes al primer error útil.
+
+**Orden:** F0 → F1 (medir cada herramienta) → F2 → F3, volviendo a ejecutar el banco de la F0 tras cada fase.
+
 ---
 
 ## 6. Fixtures (`fixtures/`)
