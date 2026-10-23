@@ -4,7 +4,7 @@ members = ["crates/*"]
 exclude = ["fixtures"]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/circe07/orq"
@@ -13,13 +13,13 @@ rust-version = "1.89"
 
 [workspace.dependencies]
 # Internal crates
-orq-core = { path = "crates/orq-core", version = "0.3.0" }
-orq-impact = { path = "crates/orq-impact", version = "0.3.0" }
-orq-runner = { path = "crates/orq-runner", version = "0.3.0" }
-orq-compress = { path = "crates/orq-compress", version = "0.3.0" }
-orq-cache = { path = "crates/orq-cache", version = "0.3.0" }
-orq-daemon = { path = "crates/orq-daemon", version = "0.3.0" }
-orq-mcp = { path = "crates/orq-mcp", version = "0.3.0" }
+orq-core = { path = "crates/orq-core", version = "0.4.0" }
+orq-impact = { path = "crates/orq-impact", version = "0.4.0" }
+orq-runner = { path = "crates/orq-runner", version = "0.4.0" }
+orq-compress = { path = "crates/orq-compress", version = "0.4.0" }
+orq-cache = { path = "crates/orq-cache", version = "0.4.0" }
+orq-daemon = { path = "crates/orq-daemon", version = "0.4.0" }
+orq-mcp = { path = "crates/orq-mcp", version = "0.4.0" }
 
 # External (see PLAN.md §3)
 cargo_metadata = "0.23"

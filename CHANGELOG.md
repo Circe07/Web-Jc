@@ -4,6 +4,41 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-10-23
+
+### Added
+- Claude Code integration:
+  - `orq hook` for `PostToolUse` on Edit/Write/MultiEdit: verifies the edited
+    file and feeds failures back to Claude as `{"decision":"block"}`. Pass
+    and non-Rust files are silent.
+  - A plugin in `integrations/claude-code/` (hook + MCP server + local
+    marketplace).
+- `orq fix` and the MCP tool `apply_fix`: apply rustc/clippy machine-applicable
+  suggestions to the affected crates, then verify again.
+- `orq doctor`: checks the toolchain, nextest, git, config, target dir,
+  cache, socket privacy, daemon and MCP registration.
+- `orq stats` shows an estimate of tokens and time saved.
+- Nightly real-world CI (`realworld.yml`, `benches/realworld.sh`) on
+  ripgrep, serde, clap and tokio; results in `docs/realworld.md`.
+
+### Changed
+- `targets = "auto"` (default, in `[build]`): check and clippy build lib, bins
+  and tests, and benches/examples only when one of them changed. This avoids
+  failing on benches that need nightly (ripgrep's globset).
+- Tests that failed last time run first and fail fast.
+- The daemon warm-up now runs the same step as a real verify (clippy, not
+  check), so its artifacts are reused, and it prebuilds the tests. On
+  ripgrep, a verify right after an edit with a warm daemon went from 28.3 s
+  to 7.2 s.
+- Errors inside a dependency (registry or git checkout) are folded into one
+  entry per dependency.
+
+### Fixed
+- Workspace members named like a registry dependency (tokio, serde) could not
+  be verified: `-p <name>` is ambiguous. Packages are now selected with
+  `path+file://<dir>#<name>` specs, using canonical paths.
+- A cargo/tool failure is no longer cached as a verification result.
+
 ## [0.3.0] - 2026-10-22
 
 ### Added

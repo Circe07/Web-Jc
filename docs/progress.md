@@ -201,3 +201,61 @@ Open items:
   tasks, and named pipes on Windows.
 - Publishing to crates.io and creating releases need a manual step (a tag
   pushed by the owner and a `CARGO_REGISTRY_TOKEN`).
+
+## Wave 5 — Cold speed, Claude Code integration and robustness · closed 2026-10-23 · `v0.4.0`
+
+Before launching, the lead added these contracts:
+- `ImpactSet.changed_files` and `BuildOptions.targets` (`auto` | `all`). Both
+  are part of the cache key, together with any bench/example files that
+  changed.
+- Stubs for `Runner::prebuild_tests` and `orq_runner::fix`, and for the
+  `orq fix`, `orq hook` and `orq doctor` subcommands.
+
+The wave was paused overnight at the user's request. In-progress work was
+saved as `wip` commits, and work resumed at 04:00 (Madrid) through a
+scheduled task. On resuming the disk was full: the lead removed the
+worktrees of the waves that were already merged.
+
+| Task | Result |
+| --- | --- |
+| T5.1 runner | `targets = auto` with per-package flags from `cargo metadata`; tests that failed last time run first (`target/orq/last_failures.json`); `prebuild_tests` |
+| T5.2 daemon | warm-up at `min(up_to, clippy)`, then a test prebuild that is dropped when a new change arrives; stats with `source = daemon-warmup` |
+| T5.3 fix | `apply_fixes` (`cargo clippy --fix` on the affected crates, diff by snapshot), `orq fix`, MCP `apply_fix` |
+| T5.4 hook/plugin | `orq hook` (PostToolUse, `decision: block`); plugin with hook + `.mcp.json` + local marketplace |
+| T5.5 robustness | `benches/realworld.sh` + nightly `realworld.yml` (ripgrep, serde, clap, tokio), `orq doctor`, estimated savings in `orq stats` |
+
+Bugs found by the real-world run, fixed by the lead:
+1. **`-p <name>` was ambiguous** when a member shares its name with a registry
+   package (tokio, serde). Every incremental verify on those workspaces
+   failed. The runner now uses `path+file://<dir>#<name>` specs. The
+   regression test reproduces the ambiguity with `itoa`, and is skipped when
+   offline.
+   - Follow-up on macOS: specs must use the canonical path (`/var` is a
+     symlink to `/private/var`). Reproduced locally with a symlinked `TMPDIR`.
+2. **Tool failures were cached:** the "ambiguous" failure was replayed from
+   the cache even after the fix. Results whose error has no file and no code
+   are no longer stored.
+3. **Errors inside dependencies flooded the report** (34 E0433 in
+   `trybuild`). They are now folded into one entry per dependency.
+
+Other fixes during integration:
+- `apply_fixes` used `--all-targets`; it now uses the runner's target
+  selection.
+- A flaky `ETXTBSY` in the cargo wrapper used by the runner tests.
+
+Measurements on ripgrep (release build, edit in `crates/matcher`, fresh
+target dir):
+
+| Case | v0.3.0 | v0.4.0 |
+| --- | --- | --- |
+| Cold `orq verify` (baseline `cargo build && cargo test`: 34.1 s) | 40.3 s | 39.3 s |
+| Verify right after an edit, warm daemon | **28.3 s** | **7.2 s** |
+| Non-Rust edit through the hook | — | 7 ms (debug build) |
+
+Open items:
+- A cold run without the daemon is still ~15% slower than the baseline,
+  because it also runs fmt and clippy.
+- `StatsRecord.raw_tokens` (proposed by T5.5) would let us measure savings
+  instead of estimating them. It needs a contract change.
+- Measuring compression quality with real agent tasks (wave 6), and named
+  pipes on Windows.

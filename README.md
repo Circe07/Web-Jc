@@ -65,12 +65,26 @@ orq daemon stop                    # (it also stops after 30 min idle)
 orq setup                          # detect fast tools, show proposed .cargo/config.toml diff
 orq setup --apply                  # write it (backs up the old file)
 
-orq stats                          # median/p90 time, cache hit rate, tokens
+orq stats                          # median/p90 time, cache hit rate, tokens, savings (estimate)
+orq fix                            # apply rustc/clippy machine-applicable fixes, then verify
+orq doctor                         # check toolchain, nextest, cache, socket, daemon, MCP setup
 ```
 
 Exit codes: `0` pass, `1` verification failed, `2` internal error.
 
 ## Use with Claude Code
+
+The quickest way is the plugin, which installs both the MCP server and a
+hook that verifies every Rust edit automatically. Failures are fed back to
+Claude; a pass is silent.
+
+```sh
+# from a clone of this repository:
+claude plugin marketplace add ./integrations/claude-code
+claude plugin install orq@orq-marketplace
+```
+
+To install only the MCP server:
 
 ```sh
 claude mcp add orq -- orq mcp
@@ -83,6 +97,8 @@ verifications stay warm. Set `autostart_daemon = false` in `orq.toml` or
 - `run_affected_tests`
 - `explain_error`
 - `impact`: helps plan which crates a change touches.
+- `apply_fix`: applies the compiler's machine-applicable suggestions, then
+  verifies again.
 
 See [`docs/claude-code.md`](docs/claude-code.md) for per-project setup and a
 suggested `CLAUDE.md` snippet.
