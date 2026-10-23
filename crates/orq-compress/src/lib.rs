@@ -700,12 +700,107 @@ fn render_error(index: usize, e: &Entry<'_>, p: &Params, w: &Words) -> (Vec<Stri
 }
 
 /// First `max_lines` non-empty lines of a test's output, each clipped.
+///
+/// A `left:` line followed by a `right:` line (a failed `assert_eq!`) is the
+/// most useful part of a test failure, so the pair gets four times the width,
+/// and beyond that is clipped as a pair around the first character where the
+/// two differ: a plain prefix would cut long values before the difference.
 fn trimmed_output(output: &str, max_lines: usize, width: usize) -> Vec<String> {
-    output
+    let lines: Vec<&str> = output
         .lines()
         .map(str::trim)
         .filter(|l| !l.is_empty())
         .take(max_lines)
-        .map(|l| clip(l, width))
-        .collect()
+        .collect();
+    let mut out = Vec::with_capacity(lines.len());
+    let mut i = 0;
+    while i < lines.len() {
+        let pair = lines
+            .get(i + 1)
+            .filter(|next| lines[i].starts_with("left:") && next.starts_with("right:"));
+        if let Some(right) = pair {
+            let (l, r) = clip_pair(lines[i], right, width.saturating_mul(4));
+            out.push(l);
+            out.push(r);
+            i += 2;
+        } else {
+            out.push(clip(lines[i], width));
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Clips `left: <a>` and `right: <b>` to `width` with the same window, placed
+/// so that the first difference between `a` and `b` is visible.
+fn clip_pair(left: &str, right: &str, width: usize) -> (String, String) {
+    if left.chars().count() <= width && right.chars().count() <= width {
+        return (left.to_string(), right.to_string());
+    }
+    let split = |line: &str, label: &str| -> (String, Vec<char>) {
+        let value = line[label.len()..].trim_start();
+        (format!("{label} "), value.chars().collect())
+    };
+    let (l_label, a) = split(left, "left:");
+    let (r_label, b) = split(right, "right:");
+    let diff = a
+        .iter()
+        .zip(&b)
+        .position(|(x, y)| x != y)
+        .unwrap_or_else(|| a.len().min(b.len()));
+    // Room for the value after the longer label and two ellipses.
+    let room = width.saturating_sub(r_label.chars().count() + 2).max(8);
+    let start = diff.saturating_sub(room / 3);
+    let window = |label: &str, v: &[char]| {
+        let end = (start + room).min(v.len());
+        let mut s = label.to_string();
+        if start > 0 {
+            s.push('…');
+        }
+        s.extend(&v[start.min(v.len())..end]);
+        if end < v.len() {
+            s.push('…');
+        }
+        s
+    };
+    (window(&l_label, &a), window(&r_label, &b))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn assert_pairs_are_clipped_around_the_first_difference() {
+        let same = "x".repeat(400);
+        let left = format!("left: \"{same} 3d ago\"");
+        let right = format!("right: \"{same} 3d late\"");
+        let out = trimmed_output(&format!("panicked\n  {left}\n {right}\n"), 10, 60);
+        assert_eq!(out.len(), 3);
+        assert!(
+            out[1].starts_with("left: …") && out[1].contains("3d ago"),
+            "{}",
+            out[1]
+        );
+        assert!(
+            out[2].starts_with("right: …") && out[2].contains("3d late"),
+            "{}",
+            out[2]
+        );
+        assert!(out[1].chars().count() <= 240 && out[2].chars().count() <= 240);
+    }
+
+    #[test]
+    fn assert_pairs_get_four_times_the_width() {
+        let left = format!("left: \"{}a\"", "x".repeat(100));
+        let right = format!("right: \"{}b\"", "x".repeat(100));
+        let out = trimmed_output(&format!("{left}\n{right}"), 10, 40);
+        assert_eq!(out, [left, right]);
+    }
+
+    #[test]
+    fn short_assert_pairs_and_other_lines_are_unchanged() {
+        let out = trimmed_output("left: 1\nright: 2\nnote: x", 10, 60);
+        assert_eq!(out, ["left: 1", "right: 2", "note: x"]);
+    }
 }
