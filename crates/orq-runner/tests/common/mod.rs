@@ -71,6 +71,22 @@ pub fn cargo_wrapper(dir: &Path) -> (PathBuf, PathBuf) {
     )
     .expect("write wrapper");
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    // Another test thread may have forked while the script was open for
+    // writing; until that child execs, running the script fails with
+    // ETXTBSY ("Text file busy"). Once one exec succeeds the window is over.
+    for attempt in 0.. {
+        match std::process::Command::new(&script)
+            .arg("--version")
+            .output()
+        {
+            Ok(_) => break,
+            Err(e) if e.raw_os_error() == Some(26) && attempt < 100 => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(e) => panic!("cargo wrapper not runnable: {e}"),
+        }
+    }
+    let _ = std::fs::remove_file(&log);
     (script, log)
 }
 
