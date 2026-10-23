@@ -380,10 +380,14 @@ Primera ejecución del arnés contra un modelo real (Gemini Flash-Lite, plan gra
 - **`--transcripts DIR`**: guarda cada conversación completa para ver por qué falla un turno.
 - **Mismo criterio que el juez**: el juez usa `clippy -D warnings`, pero orq solo lo hacía con `deny_warnings = true`, que tenía un único caso. orq decía `PASS` con un aviso y el juez lo daba por fallido, así que el agente perdía un turno. En modo orq el arnés activa ahora `deny_warnings` en la copia del caso.
 - `--orq` con ruta relativa ya funciona (el arnés trabaja en un directorio temporal).
+- **Sin trazas en modo raw**: el contenedor tenía `RUST_BACKTRACE=1` y raw pagaba las trazas completas de cada test fallido; orq ya las quitaba. El arnés pone ahora `RUST_BACKTRACE=0`.
+- **Caso del workspace corregido**: el test exigía una alineación exacta por columnas y los dos modos fallaban contando espacios, no por el cambio de API. Ahora espera líneas `nombre: importe`. Los casos nuevos pasan por rustfmt.
+
+**Resultado final** (9 casos × 3 repeticiones por modo): los dos modos arreglan los 27; orq envía 2,7 veces menos texto de errores (234 frente a 624 tokens por turno) y su verificador es más rápido (0,8 s frente a 1,0 s). orq hizo 3 turnos más (1,11 frente a 1,00 de media) y tardó más en total por la latencia de Gemini, muy irregular en esa ejecución.
 
 **Pendiente:**
-- `workspace-three-crates-api` no lo resuelve ningún modo en 4 turnos: revisar con las transcripciones si el caso es demasiado puntilloso (alineación exacta del informe) o si falta información.
-- Repetir la prueba con más repeticiones y con un modelo más fuerte, para que el ruido de latencia de la API pese menos.
+- Repetir la prueba con más repeticiones y con un modelo más fuerte, para que el ruido de latencia y los despistes del modelo pesen menos.
+- orq avisa de `file is not formatted` en los ficheros del agente, aunque el juez ignora fmt: ruido menor.
 
 ---
 

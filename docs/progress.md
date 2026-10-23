@@ -327,8 +327,17 @@ Bugs found by the real run, fixed by the lead:
    one case set. In `staged-errors-ladder` orq said `PASS` with a warning
    listed, the judge failed the run, and the agent spent a second turn. The
    transcripts showed it.
+5. **Raw mode paid for stack traces.** The container sets
+   `RUST_BACKTRACE=1`; orq forces it off for its test runs, the harness did
+   not, so every failing test in raw mode came with a full backtrace. The
+   harness now sets `RUST_BACKTRACE=0`.
+6. **`workspace-three-crates-api` tested space counting.** Both modes
+   reached the right failing test and then lost 4 turns on the exact column
+   padding it pinned, not on the API change. It now expects `name: amount`
+   lines. The new cases were also run through rustfmt (orq flagged the
+   ledger crate as unformatted, noise in a crate the agent must not touch).
 
-Agent results, 9 cases × 3 repeats per mode (before fix 4):
+Agent results, 9 cases × 3 repeats per mode, before fixes 4–6:
 
 | Mode | Fixed | Mean turns | Mean tokens | Feedback tokens/turn | Mean time | Model | Checker |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -343,9 +352,27 @@ Agent results, 9 cases × 3 repeats per mode (before fix 4):
   deleting an import on its own; with the same report, the other runs fixed
   it in one turn.
 
+After fixes 4–6 (same 9 cases × 3 repeats):
+
+| Mode | Fixed | Mean turns | Mean tokens | Feedback tokens/turn | Mean time | Model | Checker |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| raw | 27/27 | 1.00 | 2269 | 624 | 14.9 s | 13.9 s | 1.0 s |
+| orq | 27/27 | 1.11 | 2043 | 234 | 16.8 s | 16.0 s | 0.8 s |
+
+- Both modes fix every case, `workspace-three-crates-api` included, and
+  orq sends 2.7× fewer feedback tokens.
+- orq's checker is faster (0.8 s vs 1.0 s per run). The time gap is the
+  model: Gemini was slow and erratic during this run (10–50 s per run), and
+  orq took 3 extra turns.
+- The extra turns, from the transcripts: `lifetime-struct-iterator` (1) is
+  the case's trap (E0597 after a naive `lookup<'a>`), a model slip.
+  `staged-errors-ladder` (2) is the clippy lint that only shows once the
+  code compiles; neither mode shows it on turn 1, but in raw mode the model
+  rewrote the loop up front in all 3 runs. Too few runs to tell whether the
+  longer raw output causes that.
+
 Open items:
-- `workspace-three-crates-api` is fixed by neither mode in 4 turns. Check
-  the transcripts: the exact padding the test expects may be too fussy, or
-  something may be missing from the feedback.
-- Run again with more repeats and a stronger model, so API latency noise
-  weighs less.
+- Run with more repeats and a stronger model, so API latency noise and model
+  slips weigh less.
+- orq lists `file is not formatted` warnings for the agent's own files, which
+  the judge ignores (fmt never fails a case). Harmless, but noise.

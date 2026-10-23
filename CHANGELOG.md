@@ -29,7 +29,8 @@ All notable changes to this project are documented here. The format follows
 - Agent harness: a relative `--orq` path works; time no longer counts the
   waits for the Gemini rate limit, and each mode is timed with its own
   checker; orq mode denies clippy warnings like the judge, so a warning no
-  longer reads as `PASS` to the agent while the run fails.
+  longer reads as `PASS` to the agent while the run fails; raw mode runs
+  tests with `RUST_BACKTRACE=0`, as orq does.
 - A pass with warnings used to hide them. The `PASS` line now carries the
   warning count, and the warnings are listed below it within the budget.
 - `orq.toml` is part of the cache key, so changing it no longer replays an
