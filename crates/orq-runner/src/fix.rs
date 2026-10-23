@@ -74,13 +74,15 @@ pub async fn apply_fixes(
             args.extend(["-p".into(), c.name]);
         }
     }
-    // All targets (not only lib/bins/tests): `--lib` would make cargo fail on
-    // binary-only crates, and fixing tests/benches/examples is what an agent
-    // expects from "fix what the compiler suggests".
-    args.push("--all-targets".into());
+    let cargo: OsString = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
+    // Same target selection as the check/clippy steps (`Targets::Auto` skips
+    // unchanged benches/examples, which may need nightly), so `fix` touches
+    // exactly what `verify` compiles.
+    args.extend(
+        crate::targets::compile_target_args(cargo.clone(), root, impact, build.targets).await,
+    );
     args.extend(build.cargo_args());
 
-    let cargo: OsString = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
     let command = format!("cargo {}", args.join(" "));
     tracing::debug!(%command, "running");
     let output = Command::new(cargo)
