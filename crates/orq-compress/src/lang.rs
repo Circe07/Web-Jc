@@ -9,6 +9,8 @@ pub(crate) struct Words {
     pub workspace: &'static str,
     pub suggestion: &'static str,
     pub derived: &'static str,
+    pub in_dependency: &'static str,
+    pub more_there: &'static str,
 }
 
 impl Words {
@@ -20,6 +22,8 @@ impl Words {
                 workspace: "workspace",
                 suggestion: "suggestion:",
                 derived: "possibly derived from",
+                in_dependency: "in dependency",
+                more_there: "more there",
             },
             Lang::Es => Words {
                 lang,
@@ -27,6 +31,8 @@ impl Words {
                 workspace: "workspace",
                 suggestion: "sugerencia:",
                 derived: "posiblemente derivado de",
+                in_dependency: "en la dependencia",
+                more_there: "más ahí",
             },
         }
     }

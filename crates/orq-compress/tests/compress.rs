@@ -357,3 +357,47 @@ fn pass_never_exceeds_budget() {
         assert_eq!(out.text.lines().count(), 1);
     }
 }
+
+#[test]
+fn errors_inside_a_dependency_are_folded() {
+    let registry = "/home/u/.cargo/registry/src/index.crates.io-abc/trybuild-1.0.122/src/cargo.rs";
+    let mut diagnostics: Vec<Diagnostic> = (1..=34)
+        .map(|line| {
+            diag(
+                Severity::Error,
+                Some("E0433"),
+                "failed to resolve",
+                registry,
+                line,
+            )
+        })
+        .collect();
+    diagnostics.push(diag(
+        Severity::Error,
+        Some("E0308"),
+        "mismatched types",
+        "src/lib.rs",
+        3,
+    ));
+    let result = base(
+        Outcome::Fail {
+            failed_step: Step::Check,
+        },
+        diagnostics,
+    );
+    let report = LlmCompressor::new(Lang::En).compress(&result, 1500);
+    assert!(
+        report
+            .text
+            .contains("[in dependency `trybuild-1.0.122`, +33 more there]"),
+        "{}",
+        report.text
+    );
+    assert_eq!(
+        report.text.matches("trybuild-1.0.122").count(),
+        2,
+        "{}",
+        report.text
+    );
+    assert!(report.text.contains("src/lib.rs:3"), "{}", report.text);
+}

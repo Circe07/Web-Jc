@@ -12,12 +12,14 @@ expression: r.json
     {
       "code": "E0308",
       "column": 17,
+      "dependency": null,
       "derived_from": null,
       "file": "crates/api/src/handler.rs",
       "index": 1,
       "label": "expected `u64`, found `String`",
       "line": 42,
       "message": "mismatched types",
+      "more_in_dependency": 0,
       "snippet": [
         "    let id: u64 = req.id;"
       ],
@@ -26,11 +28,13 @@ expression: r.json
     {
       "code": "E0599",
       "column": 17,
+      "dependency": null,
       "derived_from": null,
       "file": "crates/api/src/handler.rs",
       "index": 2,
       "line": 50,
       "message": "no method named `foo` found",
+      "more_in_dependency": 0,
       "snippet": [
         "    let id: u64 = req.id;",
         "    other(50);"
@@ -59,29 +63,35 @@ expression: r.json
     {
       "code": "unused_variables",
       "column": 17,
+      "dependency": null,
       "derived_from": null,
       "file": "crates/api/src/lib.rs",
       "index": "W1",
       "line": 10,
-      "message": "unused variable: `x`"
+      "message": "unused variable: `x`",
+      "more_in_dependency": 0
     },
     {
       "code": "unused_variables",
       "column": 17,
+      "dependency": null,
       "derived_from": null,
       "file": "crates/api/src/lib.rs",
       "index": "W2",
       "line": 11,
-      "message": "unused variable: `x`"
+      "message": "unused variable: `x`",
+      "more_in_dependency": 0
     },
     {
       "code": "unused_variables",
       "column": 17,
+      "dependency": null,
       "derived_from": null,
       "file": "crates/api/src/lib.rs",
       "index": "W3",
       "line": 12,
-      "message": "unused variable: `x`"
+      "message": "unused variable: `x`",
+      "more_in_dependency": 0
     }
   ]
 }

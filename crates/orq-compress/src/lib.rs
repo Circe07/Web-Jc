@@ -90,6 +90,31 @@ struct Entry<'a> {
     diag: &'a Diagnostic,
     /// 1-based display index of the resolution error this one probably derives from.
     derived_from: Option<usize>,
+    /// Dependency (registry or git checkout) the error is in, if any.
+    dependency: Option<String>,
+    /// Further errors in that dependency folded into this entry.
+    more_in_dependency: usize,
+}
+
+/// The dependency a diagnostic path points into: `name-version` after
+/// `registry/src/<index>/`, or the repository after `git/checkouts/`.
+/// `None` for workspace files (relative paths).
+fn dependency_of(path: &Path) -> Option<String> {
+    if !path.is_absolute() {
+        return None;
+    }
+    let parts: Vec<String> = path
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    parts
+        .windows(2)
+        .enumerate()
+        .find_map(|(i, w)| match (w[0].as_str(), w[1].as_str()) {
+            ("registry", "src") => parts.get(i + 3).cloned(),
+            ("git", "checkouts") => parts.get(i + 2).cloned(),
+            _ => None,
+        })
 }
 
 /// Deduplication key: severity, code, file, line and (only without a code) message.
@@ -134,6 +159,8 @@ impl<'a> Prepared<'a> {
             let entry = Entry {
                 diag: d,
                 derived_from: None,
+                dependency: d.file.as_deref().and_then(dependency_of),
+                more_in_dependency: 0,
             };
             if d.severity == Severity::Error {
                 errors.push(entry);
@@ -141,6 +168,24 @@ impl<'a> Prepared<'a> {
                 warnings.push(entry);
             }
         }
+
+        // Errors inside a dependency are not the agent's to fix one by one:
+        // keep the first per dependency and count the rest.
+        let mut by_dependency: HashMap<String, usize> = HashMap::new();
+        let mut kept: Vec<Entry<'a>> = Vec::with_capacity(errors.len());
+        for entry in errors {
+            match &entry.dependency {
+                Some(dep) => match by_dependency.get(dep) {
+                    Some(&at) => kept[at].more_in_dependency += 1,
+                    None => {
+                        by_dependency.insert(dep.clone(), kept.len());
+                        kept.push(entry);
+                    }
+                },
+                None => kept.push(entry),
+            }
+        }
+        let mut errors = kept;
 
         // Cascade heuristic: errors after a resolution error in the same file.
         let mut first_resolution: HashMap<&Path, usize> = HashMap::new();
@@ -468,6 +513,13 @@ fn headline(e: &Entry<'_>, width: usize, w: &Words) -> String {
     if let Some(k) = e.derived_from {
         s.push_str(&format!(" ({} [{k}])", w.derived));
     }
+    if let Some(dep) = &e.dependency {
+        s.push_str(&format!(" [{} `{dep}`", w.in_dependency));
+        if e.more_in_dependency > 0 {
+            s.push_str(&format!(", +{} {}", e.more_in_dependency, w.more_there));
+        }
+        s.push(']');
+    }
     s
 }
 
@@ -493,6 +545,8 @@ fn item_json(index: Value, e: &Entry<'_>, width: usize) -> Value {
         "line": d.line,
         "column": d.column,
         "derived_from": e.derived_from,
+        "dependency": e.dependency,
+        "more_in_dependency": e.more_in_dependency,
     })
 }
 
