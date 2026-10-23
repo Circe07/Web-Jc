@@ -12,6 +12,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use cargo_metadata::MetadataCommand;
 use orq_core::{ChangeSet, Config, CoreError, CrateId, ImpactAnalyzer, ImpactSet};
 
+mod select;
+
+pub use select::{select_tests, TestRun, TestScope, TestSelection};
+
 /// Errors raised while building the workspace graph.
 #[derive(Debug, thiserror::Error)]
 enum ImpactError {
@@ -39,6 +43,8 @@ struct Member {
     id: CrateId,
     /// Canonical directory containing the manifest.
     dir: PathBuf,
+    /// Integration test targets (`tests/*.rs` and `[[test]]`).
+    integration: Vec<select::IntegrationTarget>,
 }
 
 /// Workspace members and their direct dependency edges.
@@ -74,6 +80,19 @@ impl Graph {
                     manifest_path: manifest,
                 },
                 dir: canonical(&dir)?,
+                integration: pkg
+                    .targets
+                    .iter()
+                    .filter(|t| t.kind.iter().any(|k| k.to_string() == "test"))
+                    .map(|t| select::IntegrationTarget {
+                        name: t.name.clone(),
+                        src: t
+                            .src_path
+                            .as_std_path()
+                            .canonicalize()
+                            .unwrap_or_else(|_| t.src_path.as_std_path().to_path_buf()),
+                    })
+                    .collect(),
             });
         }
         members.sort_by(|a, b| a.id.cmp(&b.id));
@@ -167,6 +186,18 @@ impl CargoImpactAnalyzer {
         if let Ok(canon) = root.canonicalize() {
             cache.remove(&canon);
         }
+    }
+
+    /// The test targets to run for `impact`, using the cached workspace
+    /// graph. See [`TestSelection`].
+    pub fn select_tests(
+        &self,
+        root: &Path,
+        impact: &ImpactSet,
+    ) -> Result<TestSelection, CoreError> {
+        let canon_root = canonical(root)?;
+        let graph = self.graph(&canon_root)?;
+        Ok(select::select(&graph, &canon_root, impact))
     }
 
     fn lock(&self) -> MutexGuard<'_, HashMap<PathBuf, Arc<Graph>>> {
