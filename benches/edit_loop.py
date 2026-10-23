@@ -104,10 +104,17 @@ def orq_check(orq: str, project: Path, env: dict) -> tuple[float, int]:
 
 
 def apply_edit(project: Path, rel: str, n: int) -> None:
-    """Adds a public function: a real API change, so dependents rebuild."""
+    """Adds a public function: a real API change, so dependents rebuild.
+
+    It goes before the file's `#[cfg(test)]` module, if any: an item after
+    the test module trips `clippy::items_after_test_module`.
+    """
     path = project / rel
-    with path.open("a", encoding="utf-8") as f:
-        f.write(f"\n/// Added by the edit-loop bench.\npub fn bench_edit_{n}() -> u32 {{\n    {n}\n}}\n")
+    text = path.read_text(encoding="utf-8")
+    item = f"/// Added by the edit-loop bench.\npub fn bench_edit_{n}() -> u32 {{\n    {n}\n}}\n\n"
+    at = text.find("#[cfg(test)]")
+    text = text[:at] + item + text[at:] if at >= 0 else text + "\n" + item
+    path.write_text(text, encoding="utf-8")
 
 
 def bench_config(name: str, args, nextest: bool) -> dict:
