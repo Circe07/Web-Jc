@@ -91,8 +91,9 @@ often (check the rate-limit page in AI Studio). So that a run fits:
 - a per-day 429 stops the run cleanly, and the report notes it.
 
 A full run (28 cases × 2 modes, 1–4 turns each) makes about 80–150 calls.
-Run a subset with `--case` if the daily quota is lower than that. `--effort`
-and the refusal fallbacks are Claude-only and are ignored. Cost is not
+Run a subset with `--case` if the daily quota is lower than that. `--effort` sets
+Gemini's thinking budget (low 1024, medium 4096, high 16384, xhigh 24576
+tokens, max: the model decides); the refusal fallbacks are Claude-only. Cost is not
 estimated for Gemini (free tier).
 
 Free-tier prompts may be used by Google to improve its products. The corpus

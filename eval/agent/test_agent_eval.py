@@ -125,6 +125,13 @@ class GeminiTests(unittest.TestCase):
         self.assertEqual([c["role"] for c in body["contents"]], ["user", "model"])
         self.assertEqual(body["generationConfig"]["maxOutputTokens"], 100)
 
+    def test_effort_sets_the_thinking_budget_only_when_given(self):
+        msgs = [{"role": "user", "content": "hi"}]
+        plain = ae.gemini_request("m", "sys", msgs, 100)
+        self.assertNotIn("thinkingConfig", plain["generationConfig"])
+        low = ae.gemini_request("m", "sys", msgs, 100, "low")
+        self.assertEqual(low["generationConfig"]["thinkingConfig"], {"thinkingBudget": 1024})
+
     def test_response_skips_thoughts_and_counts_them(self):
         resp = ae.gemini_response({
             "candidates": [{"finishReason": "STOP", "content": {"parts": [

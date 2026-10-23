@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import http.client
 import json
 import os
 import re
@@ -399,8 +400,16 @@ class QuotaExhausted(ModelCallError):
     """The provider's daily quota is used up: every further call would fail."""
 
 
-def gemini_request(model: str, system: str, messages: list[dict], max_tokens: int) -> dict:
+# --effort as a Gemini thinking budget (tokens; -1 lets the model decide).
+GEMINI_THINKING = {"low": 1024, "medium": 4096, "high": 16384, "xhigh": 24576, "max": -1}
+
+
+def gemini_request(model: str, system: str, messages: list[dict], max_tokens: int,
+                   effort: str | None = None) -> dict:
     """Request body for Gemini's `generateContent` (assistant turns are `model`)."""
+    config: dict = {"maxOutputTokens": max_tokens}
+    if effort in GEMINI_THINKING:
+        config["thinkingConfig"] = {"thinkingBudget": GEMINI_THINKING[effort]}
     return {
         "systemInstruction": {"parts": [{"text": system}]},
         "contents": [
@@ -408,7 +417,7 @@ def gemini_request(model: str, system: str, messages: list[dict], max_tokens: in
              "parts": [{"text": m["content"]}]}
             for m in messages
         ],
-        "generationConfig": {"maxOutputTokens": max_tokens},
+        "generationConfig": config,
     }
 
 
@@ -470,9 +479,10 @@ class GeminiClient:
         self.waited = 0.0
         self.beta = SimpleNamespace(messages=SimpleNamespace(create=self._create))
 
-    def _create(self, *, model, max_tokens, system, messages, **_ignored):
+    def _create(self, *, model, max_tokens, system, messages, effort=None, **_ignored):
         system_text = "".join(b["text"] for b in system)
-        body = json.dumps(gemini_request(model, system_text, messages, max_tokens)).encode()
+        body = json.dumps(gemini_request(model, system_text, messages, max_tokens,
+                                         effort)).encode()
         url = f"{GEMINI_URL}/models/{model}:generateContent"
         delay = 10.0
         for attempt in range(self.retries + 1):
@@ -496,7 +506,9 @@ class GeminiClient:
                     delay = min(delay * 2, 120.0)
                     continue
                 raise ModelCallError(f"Gemini HTTP {e.code}: {detail[:500]}") from e
-            except (urllib.error.URLError, TimeoutError) as e:
+            # A dropped connection (RemoteDisconnected, reset) is retried too.
+            except (urllib.error.URLError, TimeoutError, ConnectionError,
+                    http.client.HTTPException) as e:
                 if attempt < self.retries:
                     time.sleep(delay)
                     self.waited += delay
@@ -521,7 +533,8 @@ def call_model(client, model: str, effort: str, messages: list[dict],
     if isinstance(client, GeminiClient):
         return client.beta.messages.create(model=model, max_tokens=MAX_TOKENS,
                                            system=[{"type": "text", "text": SYSTEM}],
-                                           messages=messages)
+                                           messages=messages, effort=effort)
+    effort = effort or "medium"
     # No temperature/top_p/top_k, no thinking config, no prefill: they 400.
     kwargs = dict(
         model=model,
@@ -754,7 +767,9 @@ def parse_args(argv=None):
                     help="auto: gemini for gemini-*/gemma-* models, else anthropic")
     ap.add_argument("--rpm", type=float, default=8.0,
                     help="Gemini only: max requests per minute (free tier: ~5-15)")
-    ap.add_argument("--effort", default="medium", choices=["low", "medium", "high", "xhigh", "max"])
+    ap.add_argument("--effort", choices=["low", "medium", "high", "xhigh", "max"],
+                    help="Claude: effort (default medium). Gemini: thinking budget, "
+                         "only when given (default: the model's own setting)")
     ap.add_argument("--no-fallbacks", action="store_true",
                     help="do not request server-side refusal fallbacks")
     ap.add_argument("--orq", default="orq", help="path to the orq binary")
