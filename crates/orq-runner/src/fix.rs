@@ -67,13 +67,7 @@ pub async fn apply_fixes(
         "--allow-staged".into(),
         "--allow-no-vcs".into(),
     ];
-    if impact.full_rebuild {
-        args.push("--workspace".into());
-    } else {
-        for c in impact.affected() {
-            args.extend(["-p".into(), c.name]);
-        }
-    }
+    args.extend(crate::compile_package_args(impact));
     let cargo: OsString = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
     // Same target selection as the check/clippy steps (`Targets::Auto` skips
     // unchanged benches/examples, which may need nightly), so `fix` touches

@@ -571,12 +571,32 @@ fn package_args(impact: &ImpactSet) -> Vec<String> {
         .collect()
 }
 
-/// `--workspace` for a full rebuild, otherwise `-p <name>` per crate.
-fn compile_package_args(impact: &ImpactSet) -> Vec<String> {
+/// `--workspace` for a full rebuild, otherwise one `-p <spec>` per crate.
+///
+/// The spec is the crate's directory as a `path+file://` package ID spec, not its
+/// name: when a registry dependency has the same name as a workspace member
+/// (tokio, serde...), `-p <name>` is ambiguous and cargo refuses to run.
+/// `cargo fmt` does not understand specs, so it keeps [`package_args`].
+pub(crate) fn compile_package_args(impact: &ImpactSet) -> Vec<String> {
     if impact.full_rebuild {
-        vec!["--workspace".to_string()]
-    } else {
-        package_args(impact)
+        return vec!["--workspace".to_string()];
+    }
+    impact
+        .affected()
+        .into_iter()
+        .flat_map(|c| ["-p".to_string(), package_spec(&c)])
+        .collect()
+}
+
+/// Unambiguous package ID spec for a workspace member (falls back to the
+/// name when the manifest path is not usable as a `file://` URL).
+fn package_spec(krate: &orq_core::CrateId) -> String {
+    let dir = krate.manifest_path.parent().filter(|d| d.is_absolute());
+    match dir.and_then(|d| d.to_str()) {
+        // The `#name` fragment matters: without it cargo takes the last
+        // path segment as the package name.
+        Some(dir) if cfg!(unix) => format!("path+file://{dir}#{}", krate.name),
+        _ => krate.name.clone(),
     }
 }
 

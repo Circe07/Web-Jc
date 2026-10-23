@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use crate::{
     BuildOptions, CacheKey, CompactReport, Compressor, CoreError, ImpactAnalyzer, ResultCache,
-    StepRunner, VerifyRequest, VerifyResult,
+    Severity, StepRunner, VerifyRequest, VerifyResult,
 };
 
 /// The verification flow shared by the CLI (in-process mode) and the daemon:
@@ -71,7 +71,9 @@ where
         result.total_ms = elapsed_ms(start);
 
         if let (Some(cache), Some(key)) = (cache, &key) {
-            if let Err(e) = cache.put(key, &result) {
+            if is_tool_failure(&result) {
+                tracing::debug!("not caching: cargo itself failed, not the code");
+            } else if let Err(e) = cache.put(key, &result) {
                 tracing::warn!("cache store failed: {e}");
             }
         }
@@ -82,6 +84,17 @@ where
     pub fn report(&self, result: &VerifyResult, budget: usize) -> CompactReport {
         self.compressor.compress(result, budget)
     }
+}
+
+/// `true` if the result holds an error that is not a compiler diagnostic
+/// (no file, no code: cargo failed to run, a target is missing, the network
+/// was down...). Such results depend on the environment, not on the sources
+/// the cache key covers, so they must not be replayed.
+fn is_tool_failure(result: &VerifyResult) -> bool {
+    result
+        .diagnostics
+        .iter()
+        .any(|d| d.severity == Severity::Error && d.file.is_none() && d.code.is_none())
 }
 
 fn elapsed_ms(start: Instant) -> u64 {
@@ -287,6 +300,35 @@ mod tests {
         let second = block_on(p.verify(&with_features)).unwrap();
         assert!(!second.cache_hit);
         assert_eq!(p.runner.0.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn tool_failures_are_not_cached() {
+        let failing = |file: Option<&str>| VerifyResult {
+            outcome: Outcome::Fail {
+                failed_step: Step::Check,
+            },
+            steps: Vec::new(),
+            diagnostics: vec![crate::Diagnostic {
+                severity: Severity::Error,
+                code: None,
+                message: "`cargo check` failed".into(),
+                file: file.map(PathBuf::from),
+                line: None,
+                column: None,
+                snippet: None,
+                label: None,
+                suggestion: None,
+                crate_id: None,
+                step: Step::Check,
+            }],
+            test_failures: Vec::new(),
+            impact: ImpactSet::default(),
+            cache_hit: false,
+            total_ms: 0,
+        };
+        assert!(is_tool_failure(&failing(None)));
+        assert!(!is_tool_failure(&failing(Some("src/lib.rs"))));
     }
 
     #[test]
