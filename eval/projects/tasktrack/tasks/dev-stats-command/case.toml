@@ -1,0 +1,11 @@
+id = "dev-stats-command"
+category = "dev (new command across the CLI)"
+difficulty = "medium"
+base = "../.."
+description = "Add a `stats` command to the CLI: `Command::Stats` in the `cli` library returns a summary of the store, and `tasktrack stats` prints it. The exact format is in crates/cli/tests/stats.rs. Keep the other commands and tests working."
+up_to = "test"
+expected_fail_step = "check"
+
+[[facts]]
+code = "E0599"
+file = "crates/cli/tests/stats.rs"

@@ -1,0 +1,17 @@
+id = "fix-taskid-private"
+category = "fix (API change breaks 3 crates)"
+difficulty = "hard"
+base = "../.."
+description = "The `model` crate made the field of `TaskId` private on purpose: ids are now built with `TaskId::new`, `TryFrom<u32>` or `FromStr`, and read with `TaskId::get`, so an id can never be 0. Adapt `store`, `query` and `cli` so the workspace builds cleanly and every test passes. Do not change `model`."
+up_to = "test"
+expected_fail_step = "check"
+
+[[facts]]
+code = "E0423"
+file = "crates/store/src/lib.rs"
+line = 89
+
+[[facts]]
+code = "E0616"
+file = "crates/store/src/lib.rs"
+line = 71

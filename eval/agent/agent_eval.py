@@ -569,6 +569,54 @@ def write_transcript(out_dir: Path, rec: dict, messages: list[dict],
     (out_dir / name).write_text("\n".join(parts), encoding="utf-8")
 
 
+def copy_case_project(case: dict, dest: Path) -> None:
+    """The broken project of a case: its `project/`, or, with `base`, that base
+    project with `project/` copied on top.
+
+    Files get fresh mtimes (plain copy, no metadata) so that a target dir
+    shared across runs never mistakes them for already built sources.
+    """
+    if case.get("base"):
+        base = (case["dir"] / case["base"]).resolve()
+        shutil.copytree(base, dest, copy_function=shutil.copy,
+                        ignore=shutil.ignore_patterns("target", "tasks"))
+        shutil.copytree(case["dir"] / "project", dest, copy_function=shutil.copy,
+                        dirs_exist_ok=True)
+    else:
+        shutil.copytree(case["dir"] / "project", dest, copy_function=shutil.copy,
+                        ignore=shutil.ignore_patterns("target", "Cargo.lock"))
+
+
+def target_dir_for(args, mode: str, work: Path) -> Path:
+    """Per-run target dir, or a persistent one per mode with --target-cache."""
+    if getattr(args, "target_cache", None):
+        return Path(args.target_cache).resolve() / mode
+    return work / "target"
+
+
+def warm_target(case: dict, mode: str, args) -> float:
+    """Builds the case's base project once into the persistent target dir of
+    `mode`, as on a developer's machine where dependencies are already built.
+    Returns the seconds it took (not part of any run's time)."""
+    start = time.monotonic()
+    work = Path(tempfile.mkdtemp(prefix="orq-agent-warm-"))
+    try:
+        project = work / "project"
+        base = (case["dir"] / case["base"]).resolve() if case.get("base") else case["dir"] / "project"
+        shutil.copytree(base, project, copy_function=shutil.copy,
+                        ignore=shutil.ignore_patterns("target", "tasks"))
+        env = cargo_env(target_dir_for(args, mode, work))
+        for cmd in (["cargo", "clippy", "--all-targets", "--", "-D", "warnings"],
+                    ["cargo", "test", "--no-run"]):
+            _run(cmd, project, env)
+        if mode == "orq":
+            deny_warnings_like_judge(project)
+            orq_feedback(args.orq, project, "test", args.budget, env)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    return time.monotonic() - start
+
+
 def run_one(case: dict, mode: str, repeat: int, args, client, run_id: str) -> dict:
     start = time.monotonic()
     rec = {
@@ -588,11 +636,10 @@ def run_one(case: dict, mode: str, repeat: int, args, client, run_id: str) -> di
     work = Path(tempfile.mkdtemp(prefix="orq-agent-eval-"))
     try:
         project = work / "project"
-        shutil.copytree(case["dir"] / "project", project,
-                        ignore=shutil.ignore_patterns("target", "Cargo.lock"))
+        copy_case_project(case, project)
         if mode == "orq":
             deny_warnings_like_judge(project)
-        env = cargo_env(work / "target")
+        env = cargo_env(target_dir_for(args, mode, work))
         if args.mock:
             client = MockClient(case["dir"] / "fix", 1 if mode == "orq" else 2)
 
@@ -716,6 +763,9 @@ def parse_args(argv=None):
                     help="write each run's conversation to DIR/<run id>/")
     ap.add_argument("--mock", action="store_true", help="fake client, no network")
     ap.add_argument("--repeat", type=int, default=1)
+    ap.add_argument("--target-cache", metavar="DIR",
+                    help="keep one cargo target dir per mode in DIR across runs, "
+                         "built once up front (warm dependencies, like a dev machine)")
     return ap.parse_args(argv)
 
 
@@ -766,9 +816,15 @@ def main(argv=None) -> int:
 
     records = []
     stopped = None
+    warmed: set[tuple[str, str]] = set()
     with jsonl.open("w", encoding="utf-8") as f:
         for case in cases:
             for mode in modes:
+                key = (str(case.get("base") and (case["dir"] / case["base"]).resolve()), mode)
+                if args.target_cache and not args.mock and case.get("base") and key not in warmed:
+                    secs = warm_target(case, mode, args)
+                    warmed.add(key)
+                    print(f"warmed {mode} target dir in {secs:.0f}s", file=sys.stderr)
                 for rep in range(1, args.repeat + 1):
                     if stopped:
                         break

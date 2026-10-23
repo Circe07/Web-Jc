@@ -1,0 +1,13 @@
+id = "fix-two-logic-bugs"
+category = "fix (2 logic bugs in 2 crates)"
+difficulty = "medium"
+base = "../.."
+description = "Two tests fail: sorting by due date and the due-date labels in `tasktrack list`. The tests are right; fix the code."
+up_to = "test"
+expected_fail_step = "test"
+
+[[facts]]
+test = "tests::by_due_puts_undated_last"
+
+[[facts]]
+test = "list_renders_an_aligned_table"

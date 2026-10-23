@@ -1,0 +1,20 @@
+[workspace]
+members = ["crates/model", "crates/store", "crates/query", "crates/cli"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+publish = false
+version = "0.1.0"
+
+[workspace.dependencies]
+anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
+clap = { version = "4", features = ["derive"] }
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+model = { path = "crates/model" }
+store = { path = "crates/store" }
+query = { path = "crates/query" }

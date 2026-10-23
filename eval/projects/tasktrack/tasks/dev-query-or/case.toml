@@ -1,0 +1,10 @@
+id = "dev-query-or"
+category = "dev (feature in one crate)"
+difficulty = "medium"
+base = "../.."
+description = "Add `or` to the query language of the `query` crate: terms separated by the word `or` (any case) form groups, and a task matches when every term of at least one group matches. An empty group is an error. The new tests in crates/query/tests/or.rs describe the behaviour; keep the existing tests passing."
+up_to = "test"
+expected_fail_step = "test"
+
+[[facts]]
+test = "either_group_matches"

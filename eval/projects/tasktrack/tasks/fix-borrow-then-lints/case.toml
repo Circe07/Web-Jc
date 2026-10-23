@@ -1,0 +1,12 @@
+id = "fix-borrow-then-lints"
+category = "fix (borrow error, then clippy lints in another crate)"
+difficulty = "medium"
+base = "../.."
+description = "The workspace must build without warnings under `cargo clippy --all-targets -- -D warnings` and pass its tests. Keep the behaviour of every function."
+up_to = "test"
+expected_fail_step = "check"
+
+[[facts]]
+code = "E0502"
+file = "crates/store/src/lib.rs"
+line = 133

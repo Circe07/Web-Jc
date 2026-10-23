@@ -1,0 +1,11 @@
+id = "dev-recurrence"
+category = "dev (feature across two crates + file format)"
+difficulty = "hard"
+base = "../.."
+description = "Add recurring tasks. In `model`: a `Recurrence` (daily, weekly, monthly) set with `every:day|week|month` in quick-add, stored on `Task` as `recur`, shown last by `Display` as `every:<name>`; a recurrence without a due date is an error. In `store`: `Store::complete(id, today)` marks the task done and, for a recurring task that was not already done, adds the next occurrence and returns its id. Files written before this change must still load. The new tests in crates/model/tests/recurrence.rs and crates/store/tests/recurrence.rs describe the details."
+up_to = "test"
+expected_fail_step = "check"
+
+[[facts]]
+code = "E0432"
+file = "crates/model/tests/recurrence.rs"
