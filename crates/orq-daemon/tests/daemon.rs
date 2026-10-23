@@ -232,3 +232,91 @@ async fn oversized_request_is_dropped_and_daemon_survives() {
     ));
     stop(&root, handle).await;
 }
+
+fn warmup_records(root: &Path) -> Vec<orq_core::stats::StatsRecord> {
+    orq_core::stats::read_all(root)
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.source == "daemon-warmup")
+        .collect()
+}
+
+async fn wait_for_warmups(root: &Path, at_least: usize) -> Vec<orq_core::stats::StatsRecord> {
+    for _ in 0..1200 {
+        let records = warmup_records(root);
+        if records.len() >= at_least {
+            return records;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("no warm-up record appeared");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn warmup_runs_configured_step_and_warms_the_cache() {
+    let (_dir, root) = fixture();
+    let handle = start(&root, DaemonOptions::default());
+    wait_ready(&root).await;
+
+    let lib = root.join("crates/leaf/src/lib.rs");
+    let original = std::fs::read_to_string(&lib).unwrap();
+    std::fs::write(&lib, format!("{original}\n// warm\n")).unwrap();
+
+    // Default config is up_to = test; the warm-up compiles at clippy.
+    let records = wait_for_warmups(&root, 1).await;
+    assert_eq!(records[0].up_to, Step::Clippy);
+    assert!(records[0].via_daemon);
+    assert_eq!(records[0].tokens, 0);
+    assert_eq!(records[0].outcome, "pass");
+
+    // Nothing changed since: a clippy verify is served from the cache.
+    let req = DaemonRequest::Verify(VerifyRequest {
+        root: root.clone(),
+        up_to: Step::Clippy,
+        use_cache: true,
+        ..VerifyRequest::default()
+    });
+    match request(&root, req).await.unwrap() {
+        Some(DaemonResponse::Verify(result)) => {
+            assert!(result.outcome.is_pass(), "{result:?}");
+            assert!(result.cache_hit, "expected a cache hit: {result:?}");
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+    stop(&root, handle).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn change_during_warmup_does_not_deadlock() {
+    let (_dir, root) = fixture();
+    let handle = start(&root, DaemonOptions::default());
+    wait_ready(&root).await;
+
+    let lib = root.join("crates/leaf/src/lib.rs");
+    let original = std::fs::read_to_string(&lib).unwrap();
+    std::fs::write(&lib, format!("{original}\n// one\n")).unwrap();
+    // Wait until the daemon is warming, then change the file again.
+    for _ in 0..200 {
+        if let Some(DaemonResponse::Status(s)) =
+            request(&root, DaemonRequest::Status).await.unwrap()
+        {
+            if s.warming {
+                break;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    std::fs::write(&lib, format!("{original}\n// two\n")).unwrap();
+
+    let answer = tokio::time::timeout(
+        Duration::from_secs(300),
+        request(&root, verify_request(&root)),
+    )
+    .await
+    .expect("verify must return");
+    match answer.unwrap() {
+        Some(DaemonResponse::Verify(result)) => assert!(result.outcome.is_pass(), "{result:?}"),
+        other => panic!("unexpected {other:?}"),
+    }
+    stop(&root, handle).await;
+}
