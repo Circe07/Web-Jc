@@ -1,0 +1,25 @@
+[package]
+name = "orq-impact"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/orq-impact"
+description = "Impact analysis for orq: maps changed files to affected workspace crates."
+keywords = ["cargo", "build", "ai-agents", "mcp", "testing"]
+categories = ["development-tools", "development-tools::build-utils"]
+readme = "../../README.md"
+
+[dependencies]
+orq-core.workspace = true
+cargo_metadata.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

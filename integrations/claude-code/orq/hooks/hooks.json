@@ -1,0 +1,17 @@
+{
+  "description": "Verify Rust edits with orq (cargo fmt/check on the affected crates) and feed failures back to Claude.",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "orq hook",
+            "timeout": 120
+          }
+        ]
+      }
+    ]
+  }
+}

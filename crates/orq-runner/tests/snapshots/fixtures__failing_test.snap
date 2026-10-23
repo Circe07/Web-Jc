@@ -1,0 +1,56 @@
+---
+source: crates/orq-runner/tests/fixtures.rs
+expression: normalized
+---
+{
+  "outcome": {
+    "status": "fail",
+    "failed_step": "test"
+  },
+  "steps": [
+    {
+      "step": "fmt",
+      "duration_ms": 0,
+      "passed": true
+    },
+    {
+      "step": "check",
+      "duration_ms": 0,
+      "passed": true
+    },
+    {
+      "step": "clippy",
+      "duration_ms": 0,
+      "passed": true
+    },
+    {
+      "step": "test",
+      "duration_ms": 0,
+      "passed": false
+    }
+  ],
+  "diagnostics": [],
+  "test_failures": [
+    {
+      "name": "tests::adds_wrongly",
+      "crate_id": {
+        "name": "failing-test",
+        "manifest_path": "[manifest]"
+      },
+      "output": "[output]"
+    }
+  ],
+  "impact": {
+    "changed": [
+      {
+        "name": "failing-test",
+        "manifest_path": "[manifest]"
+      }
+    ],
+    "dependents": [],
+    "full_rebuild": false,
+    "changed_files": []
+  },
+  "cache_hit": false,
+  "total_ms": 0
+}

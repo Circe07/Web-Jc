@@ -1,0 +1,54 @@
+name: Real-world
+
+# Runs `orq verify` against pinned real-world Rust projects (ripgrep, serde,
+# clap, tokio). Nightly and on demand only: it is slow and must never gate PRs.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      only:
+        description: "Space-separated project names (default: all)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  realworld:
+    name: real-world projects
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Build orq (release)
+        run: cargo build --release -p orq-cli
+      - name: Run the real-world script
+        env:
+          ONLY: ${{ github.event.inputs.only }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/realworld"
+          set +e
+          benches/realworld.sh "$RUNNER_TEMP/realworld" target/release/orq \
+            | tee realworld-table.md
+          rc=${PIPESTATUS[0]}
+          cat realworld-table.md >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
+      - name: Upload table and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: realworld
+          path: |
+            realworld-table.md
+            ${{ runner.temp }}/realworld/logs
+          if-no-files-found: warn

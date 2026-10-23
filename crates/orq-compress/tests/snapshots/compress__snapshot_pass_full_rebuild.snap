@@ -1,0 +1,5 @@
+---
+source: crates/orq-compress/tests/compress.rs
+expression: out.text
+---
+PASS check · crates: workspace · 1.8s (cache: yes)

@@ -1,0 +1,31 @@
+[package]
+name = "orq-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/orq-mcp"
+description = "MCP server for orq: exposes verify, impact and explain_error tools over stdio."
+keywords = ["cargo", "build", "ai-agents", "mcp", "testing"]
+categories = ["development-tools", "development-tools::build-utils"]
+readme = "../../README.md"
+
+[dependencies]
+orq-core.workspace = true
+orq-impact.workspace = true
+orq-runner.workspace = true
+orq-compress.workspace = true
+orq-daemon.workspace = true
+rmcp.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

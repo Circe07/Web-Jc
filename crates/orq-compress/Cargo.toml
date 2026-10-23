@@ -1,0 +1,23 @@
+[package]
+name = "orq-compress"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/orq-compress"
+description = "Compresses cargo diagnostics into compact, token-efficient output for AI agents."
+keywords = ["cargo", "build", "ai-agents", "mcp", "testing"]
+categories = ["development-tools", "development-tools::build-utils"]
+readme = "../../README.md"
+
+[dependencies]
+orq-core.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+
+[lints]
+workspace = true

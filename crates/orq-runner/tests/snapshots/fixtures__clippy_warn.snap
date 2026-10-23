@@ -1,0 +1,143 @@
+---
+source: crates/orq-runner/tests/fixtures.rs
+expression: normalized
+---
+{
+  "outcome": {
+    "status": "pass"
+  },
+  "steps": [
+    {
+      "step": "fmt",
+      "duration_ms": 0,
+      "passed": true
+    },
+    {
+      "step": "check",
+      "duration_ms": 0,
+      "passed": true
+    },
+    {
+      "step": "clippy",
+      "duration_ms": 0,
+      "passed": true
+    },
+    {
+      "step": "test",
+      "duration_ms": 0,
+      "passed": true
+    }
+  ],
+  "diagnostics": [
+    {
+      "severity": "warning",
+      "code": "clippy::ptr_arg",
+      "message": "writing `&Vec` instead of `&[_]` involves a new object where a slice will do",
+      "file": "src/lib.rs",
+      "line": 1,
+      "column": 24,
+      "snippet": "pub fn is_empty_len(v: &Vec<u32>) -> bool {",
+      "label": null,
+      "suggestion": "&[u32]",
+      "crate_id": {
+        "name": "clippy-warn",
+        "manifest_path": "[manifest]"
+      },
+      "step": "clippy"
+    },
+    {
+      "severity": "warning",
+      "code": "clippy::ptr_arg",
+      "message": "writing `&Vec` instead of `&[_]` involves a new object where a slice will do",
+      "file": "src/lib.rs",
+      "line": 1,
+      "column": 24,
+      "snippet": "pub fn is_empty_len(v: &Vec<u32>) -> bool {",
+      "label": null,
+      "suggestion": "&[u32]",
+      "crate_id": {
+        "name": "clippy-warn",
+        "manifest_path": "[manifest]"
+      },
+      "step": "clippy"
+    },
+    {
+      "severity": "warning",
+      "code": "clippy::needless_return",
+      "message": "unneeded `return` statement",
+      "file": "src/lib.rs",
+      "line": 2,
+      "column": 5,
+      "snippet": "    return v.len() == 0;",
+      "label": null,
+      "suggestion": "v.len() == 0",
+      "crate_id": {
+        "name": "clippy-warn",
+        "manifest_path": "[manifest]"
+      },
+      "step": "clippy"
+    },
+    {
+      "severity": "warning",
+      "code": "clippy::needless_return",
+      "message": "unneeded `return` statement",
+      "file": "src/lib.rs",
+      "line": 2,
+      "column": 5,
+      "snippet": "    return v.len() == 0;",
+      "label": null,
+      "suggestion": "v.len() == 0",
+      "crate_id": {
+        "name": "clippy-warn",
+        "manifest_path": "[manifest]"
+      },
+      "step": "clippy"
+    },
+    {
+      "severity": "warning",
+      "code": "clippy::len_zero",
+      "message": "length comparison to zero",
+      "file": "src/lib.rs",
+      "line": 2,
+      "column": 12,
+      "snippet": "    return v.len() == 0;",
+      "label": null,
+      "suggestion": "v.is_empty()",
+      "crate_id": {
+        "name": "clippy-warn",
+        "manifest_path": "[manifest]"
+      },
+      "step": "clippy"
+    },
+    {
+      "severity": "warning",
+      "code": "clippy::len_zero",
+      "message": "length comparison to zero",
+      "file": "src/lib.rs",
+      "line": 2,
+      "column": 12,
+      "snippet": "    return v.len() == 0;",
+      "label": null,
+      "suggestion": "v.is_empty()",
+      "crate_id": {
+        "name": "clippy-warn",
+        "manifest_path": "[manifest]"
+      },
+      "step": "clippy"
+    }
+  ],
+  "test_failures": [],
+  "impact": {
+    "changed": [
+      {
+        "name": "clippy-warn",
+        "manifest_path": "[manifest]"
+      }
+    ],
+    "dependents": [],
+    "full_rebuild": false,
+    "changed_files": []
+  },
+  "cache_hit": false,
+  "total_ms": 0
+}

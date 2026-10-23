@@ -1,0 +1,31 @@
+[package]
+name = "orq-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/orq-daemon"
+description = "Background daemon for orq: keeps impact state warm and serves verify requests."
+keywords = ["cargo", "build", "ai-agents", "mcp", "testing"]
+categories = ["development-tools", "development-tools::build-utils"]
+readme = "../../README.md"
+
+[dependencies]
+orq-core.workspace = true
+orq-impact.workspace = true
+orq-runner.workspace = true
+orq-cache.workspace = true
+orq-compress.workspace = true
+tokio.workspace = true
+notify.workspace = true
+notify-debouncer-full.workspace = true
+tracing.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

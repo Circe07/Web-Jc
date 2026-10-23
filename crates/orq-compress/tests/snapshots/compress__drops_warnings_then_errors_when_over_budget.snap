@@ -1,0 +1,18 @@
+---
+source: crates/orq-compress/tests/compress.rs
+expression: out.text
+---
+FAIL check (20 errors, 20 warnings hidden) · crates: api · 1.8s
+[1] E0308 mismatched types in a rather long message that takes tokens — src/a.rs:1:17
+[2] E0308 mismatched types in a rather long message that takes tokens — src/a.rs:2:17
+[3] E0308 mismatched types in a rather long message that takes tokens — src/a.rs:3:17
+[4] E0308 mismatched types in a rather long message that takes tokens — src/a.rs:4:17
+[5] E0308 mismatched types in a rather long message that takes tokens — src/a.rs:5:17
+[6] E0308 mismatched types in a rather long message that takes tokens — src/a.rs:6:17
+[7] E0308 mismatched types in a rather long message that takes tokens — src/a.rs:7:17
+[8] E0308 mismatched types in a rather long message that takes tokens — src/a.rs:8:17
+[9] E0308 mismatched types in a rather long message that takes tokens — src/a.rs:9:17
+[10] E0308 mismatched types in a rather long message that takes tokens — src/a.rs:10:17
+[11] E0308 mismatched types in a rather long message that takes tokens — src/a.rs:11:17
+[12] E0308 mismatched types in a rather long message that takes tokens — src/a.rs:12:17
++8 more errors
